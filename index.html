@@ -5598,6 +5598,7 @@ async function autoSendResult(scores, ranked) {
     const payload = {
       apiKey: API_KEY,
       action: "saveDisc",
+      requestId: getOrCreateDisc360RequestId("saveDisc", (document.getElementById("email").value.trim() || _as.email || "") + "_" + (signupPin || _as.pin || "")),
       testId: "disc_v2",
       nome:        document.getElementById("name").value.trim()       || _as.nome         || "",
       email:       document.getElementById("email").value.trim()      || _as.email         || "",
@@ -6689,6 +6690,29 @@ async function atualizarStatus360() {
 
 
   
+
+function getOrCreateDisc360RequestId(scope, seed) {
+  const safeScope = String(scope || "default").replace(/[^a-zA-Z0-9_-]/g, "_");
+  const safeSeed = String(seed || "anon").trim().toLowerCase().replace(/[^a-zA-Z0-9@._-]/g, "_").slice(0, 120) || "anon";
+  const storageKey = "disc360_request_" + safeScope + "_" + safeSeed;
+  try {
+    const existing = localStorage.getItem(storageKey);
+    if (existing && /^[a-zA-Z0-9_-]{20,100}$/.test(existing)) return existing;
+  } catch (e) {}
+  const randomPart = (window.crypto && crypto.getRandomValues)
+    ? Array.from(crypto.getRandomValues(new Uint32Array(4))).map(n => n.toString(36)).join("")
+    : Math.random().toString(36).slice(2) + Date.now().toString(36);
+  const requestId = ("disc360_" + safeScope + "_" + Date.now().toString(36) + "_" + randomPart).slice(0, 100);
+  try { localStorage.setItem(storageKey, requestId); } catch (e) {}
+  return requestId;
+}
+
+function resetDisc360RequestId(scope, seed) {
+  const safeScope = String(scope || "default").replace(/[^a-zA-Z0-9_-]/g, "_");
+  const safeSeed = String(seed || "anon").trim().toLowerCase().replace(/[^a-zA-Z0-9@._-]/g, "_").slice(0, 120) || "anon";
+  try { localStorage.removeItem("disc360_request_" + safeScope + "_" + safeSeed); } catch (e) {}
+}
+
 /* ---------- Relatório 360° (PDF) ---------- */
 async function gerarRelatorio360() {
   if (!dadosPainel360) return;
@@ -6709,6 +6733,7 @@ async function gerarRelatorio360() {
     const payload = {
       apiKey: API_KEY,
       action: "relatorio_360",
+      requestId: getOrCreateDisc360RequestId("relatorio360", (dadosPainel360.sessionId || dadosPainel360.email || "") + "_" + (dadosPainel360.pin || "")),
       email: dadosPainel360.email,
       nome: dadosPainel360.nome || "Avaliado",
       sessionId: dadosPainel360.sessionId || "",
@@ -6786,6 +6811,7 @@ async function gerarRelatorioGeral() {
     await postResultToScript({
       apiKey: API_KEY,
       action: "relatorio_disc",
+      requestId: getOrCreateDisc360RequestId("relatorioDisc", (dadosPainel360.sessionId || dadosPainel360.email || "") + "_" + (dadosPainel360.pin || "")),
       email: dadosPainel360.email,
       sessionId: dadosPainel360.sessionId || "",
       pin: dadosPainel360.pin,
