@@ -1,0 +1,30 @@
+name: Verificar HTML e JavaScript
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fix/disc360-homologacao-20261012
+    paths:
+      - 'index.html'
+      - '.github/workflows/validar-disc.yml'
+jobs:
+  validar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verificar JavaScript inline
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const vm = require('vm');
+          const html = fs.readFileSync('index.html', 'utf8');
+          const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)]
+            .filter(m => !/\bsrc\s*=/.test(m[1]))
+            .map(m => m[2]).filter(s => s.trim());
+          if (!scripts.length) { console.error('Nenhum script inline encontrado'); process.exit(1); }
+          scripts.forEach((s, i) => { new vm.Script(s, {filename: 'inline-' + (i+1) + '.js'}); });
+          console.log('Scripts válidos:', scripts.length);
+          NODE

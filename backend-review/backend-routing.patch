@@ -1,0 +1,34 @@
+--- a/Codigo.gs
++++ b/Codigo.gs
+@@ -32,9 +32,9 @@
+ function doPost(e) {
+   try {
+-    if (!e || !e.postData || !e.postData.contents) {
++    if (!e || (!(e.parameter && e.parameter.payload) && !(e.postData && e.postData.contents))) {
+       return jsonResponse({ ok: false, error: "Sem payload" });
+     }
+ 
+-    const payload = JSON.parse(e.postData.contents);
++    const payload = JSON.parse((e.parameter && e.parameter.payload) || e.postData.contents);
+ 
+     if (payload.apiKey !== API_KEY) {
+@@ -46,4 +46,5 @@
+ 
+     switch (action) {
++      case "relatorio_360":     return handleRelatorio360(payload);
+       case "saveDisc":          return handleSaveDisc(payload);
+       case "createSession360":  return handleCreateSession360(payload);
+@@ -154,5 +155,5 @@
+ // 1️⃣ DISC ORIGINAL — SALVAMENTO + EMAIL
+ // ═══════════════════════════════════════════════════════════════════════
+-function handleSaveDisc(payload) {
++function handleSaveDiscOriginal(payload) {
+   try {
+     const ss = getSpreadsheet();
+@@ -357,5 +358,5 @@
+ // 4️⃣ CONVIDADO ENVIA RESPOSTA  🆕 CORRIGIDO — aceita sessionId OU pin
+ // ═══════════════════════════════════════════════════════════════════════
+-function handleSubmitConvidado(payload) {
++function handleSubmitConvidadoOriginal(payload) {
+   try {
+     // 🆕 Prioriza CÓDIGO 360° (DISC-XXXXX); cai para sessionId; cai para PIN
