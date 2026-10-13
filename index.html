@@ -6719,14 +6719,16 @@ async function gerarRelatorio360() {
       notifyAdmin: true
     };
 
-    await postResultToScript(payload);
-    await wait(700);
-
-    // Também oferece download direto
+    // O download não depende da disponibilidade do serviço de e-mail.
     doc.save(`Relatorio360_${safeName}.pdf`);
-
-    status.textContent = "✅ Relatório gerado, baixado e enviado para seu e-mail!";
-    status.className = "status status-success";
+    try {
+      await postResultToScript(payload);
+      status.textContent = "PDF gerado e download iniciado. O envio por e-mail foi solicitado, mas ainda não foi confirmado pelo servidor.";
+    } catch (sendError) {
+      console.warn("Envio do relatório não confirmado:", sendError);
+      status.textContent = "PDF gerado e download iniciado. Não foi possível solicitar o envio por e-mail.";
+    }
+    status.className = "status status-pending";
     btn.disabled = false;
     btn.innerHTML = "📄 Gerar Relatório Comparativo (PDF)";
 
@@ -6771,6 +6773,16 @@ async function gerarRelatorioGeral() {
       reader.readAsDataURL(mergedBlob);
     });
 
+
+
+    const mergedUrl = URL.createObjectURL(mergedBlob);
+    const a = document.createElement("a");
+    a.href = mergedUrl;
+    a.download = `RelatorioCompleto_${safeName}.pdf`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(mergedUrl), 1500);
+    let emailRequested = false;
+    try {
     await postResultToScript({
       apiKey: API_KEY,
       action: "relatorio_disc",
@@ -6783,16 +6795,15 @@ async function gerarRelatorioGeral() {
       notifyAdmin: true,
       nome: dadosPainel360.nome || "Avaliado"
     });
-
-    const mergedUrl = URL.createObjectURL(mergedBlob);
-    const a = document.createElement("a");
-    a.href = mergedUrl;
-    a.download = `RelatorioCompleto_${safeName}.pdf`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(mergedUrl), 1500);
+      emailRequested = true;
+    } catch (sendError) {
+      console.warn("Envio do relatório completo não confirmado:", sendError);
+    }
     if (status) {
-      status.textContent = "✅ Relatório completo gerado, enviado e baixado.";
-      status.className = "status status-success";
+      status.textContent = emailRequested
+        ? "PDF completo gerado e download iniciado. O envio por e-mail foi solicitado, mas ainda não foi confirmado pelo servidor."
+        : "PDF completo gerado e download iniciado. Não foi possível solicitar o envio por e-mail.";
+      status.className = "status status-pending";
     }
   } catch (err) {
     console.error("Erro ao gerar relatório geral:", err);
