@@ -1637,7 +1637,7 @@
         <div style="background:linear-gradient(135deg, #fff, #f4f9ff); border:3px solid #0b63ce; border-radius:16px; padding:36px 22px 28px; margin:0 0 28px; box-shadow:0 16px 32px rgba(11,99,206,0.18); position:relative;">
           <div style="position:absolute; top:-22px; left:50%; transform:translateX(-50%); background:#fff; border:3px solid #0b63ce; width:48px; height:48px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:24px;">🔐</div>
           <h3 style="margin:0 0 18px; text-align:center; color:#063b7a; font-family:Arial,sans-serif; font-size:20px; font-weight:900;">Como você quer começar?</h3>
-          <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+          <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:14px;">
             <div style="background:#fff; border:2.5px solid #d5e6fb; border-radius:14px; padding:24px 18px; text-align:center; cursor:pointer; transition:all 0.25s ease;" onclick="irParaCadastro();" onmouseover="this.style.transform='translateY(-4px)'; this.style.borderColor='#0b63ce'; this.style.boxShadow='0 16px 28px rgba(11,99,206,0.22)';" onmouseout="this.style.transform='translateY(0)'; this.style.borderColor='#d5e6fb'; this.style.boxShadow='none';">
               <div style="font-size:48px; display:block; margin-bottom:10px;">🆕</div>
               <h4 style="margin:0 0 8px; color:#063b7a; font-family:Arial,sans-serif; font-size:17px; font-weight:900;">Primeira vez aqui</h4>
@@ -1648,11 +1648,17 @@
             </div>
             <div style="background:#fff; border:2.5px solid #d5e6fb; border-radius:14px; padding:24px 18px; text-align:center; cursor:pointer; transition:all 0.25s ease;" onclick="abrirLogin360();" onmouseover="this.style.transform='translateY(-4px)'; this.style.borderColor='#0b63ce'; this.style.boxShadow='0 16px 28px rgba(11,99,206,0.22)';" onmouseout="this.style.transform='translateY(0)'; this.style.borderColor='#d5e6fb'; this.style.boxShadow='none';">
               <div style="font-size:48px; display:block; margin-bottom:10px;">🔑</div>
-              <h4 style="margin:0 0 8px; color:#063b7a; font-family:Arial,sans-serif; font-size:17px; font-weight:900;">Já tenho cadastro</h4>
+              <h4 style="margin:0 0 8px; color:#063b7a; font-family:Arial,sans-serif; font-size:17px; font-weight:900;">Meu painel DISC</h4>
               <p style="margin:0 0 14px; font-size:13px; color:#475569; line-height:1.5;">Acesse seu Painel 360° para verificar status das avaliações e gerar seu relatório.</p>
               <button class="btn-mini" type="button" onclick="event.stopPropagation(); abrirLogin360();" style="background:linear-gradient(45deg, #0b63ce, #084aa0); color:#fff; padding:10px 22px; border-radius:10px; font-weight:800; font-size:13px; font-family:Arial,sans-serif; display:inline-block; border:none; cursor:pointer; transition:all 0.2s ease;" onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 8px 16px rgba(11,99,206,0.25)';" onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='none';">
-                Entrar com PIN →
+                Entrar com PIN antigo →
               </button>
+            </div>
+            <div style="background:#fff; border:2.5px solid #d5e6fb; border-radius:14px; padding:24px 18px; text-align:center;">
+              <div style="font-size:48px;display:block;margin-bottom:10px;">🔄</div>
+              <h4 style="margin:0 0 8px;color:#063b7a;font-family:Arial,sans-serif;font-size:17px;font-weight:900;">Ativar ou reativar</h4>
+              <p style="margin:0 0 14px;font-size:13px;color:#475569;line-height:1.5;">Perdeu o PIN ou não recebe o e-mail? Solicite conferência do cadastro antigo sem perder suas avaliações.</p>
+              <button class="btn-mini" type="button" onclick="abrirRecuperarPin()" style="background:#e9f2ff;color:#074d91;padding:10px 20px;border:1px solid #b8d3ee;border-radius:10px;font-weight:800;font-size:13px;">Recuperar acesso →</button>
             </div>
           </div>
         </div>
@@ -2319,9 +2325,9 @@
     <div class="recover-modal-box">
       <button class="recover-modal-close" type="button" onclick="fecharRecuperarPin()">✕</button>
       <div style="text-align:center; font-size:48px; margin-bottom:6px;">🔓</div>
-      <h3>Recuperar meu PIN</h3>
+      <h3>Recuperar acesso ao DISC</h3>
       <p class="recover-sub">
-        Informe o e-mail usado no cadastro. Se ele estiver na nossa base, enviaremos seu PIN por e-mail em alguns minutos.
+        Informe o e-mail usado anteriormente. Tentaremos a recuperação do acesso legado; caso o serviço antigo não responda, você poderá solicitar reativação e conferência do cadastro com o Instituto Impulso.
       </p>
 
       <div class="form-group" style="margin-bottom:14px;">
@@ -2336,12 +2342,16 @@
       <div id="recover-status" class="status" style="margin-bottom:10px;"></div>
 
       <button id="btn-recuperar-pin" class="btn btn-primary" type="button" onclick="enviarRecuperarPin()" style="width:100%; justify-content:center; padding:14px; font-size:15px;">
-        📩 Enviar meu PIN por e-mail
+        📩 Solicitar recuperação do acesso
       </button>
+      <div id="recover-fallback" style="margin-top:13px;display:grid;gap:9px;">
+        <a id="recover-recadastro" href="mailto:impulsoflow@gmail.com?subject=Reativacao%20de%20conta%20Impulso" style="display:block;text-align:center;border:1px solid #b9d2e7;border-radius:11px;padding:11px;color:#124e8b;font-weight:800;text-decoration:none;">Ativar ou solicitar recadastro</a>
+        <small style="text-align:center;color:#617892;line-height:1.5;">Seu histórico anterior será preservado. Uma nova pesquisa não será liberada sem autorização do administrador.</small>
+      </div>
 
       <p style="text-align:center; margin-top:16px; font-size:12px; color:#64748b; line-height:1.5;">
         🔒 Por segurança, não dizemos se o e-mail existe ou não na base.<br>
-        Se você cadastrou esse e-mail, vai receber a mensagem em até 5 minutos.
+        Caso o serviço antigo não consiga enviar, utilize a opção de solicitar reativação ou recadastro.
       </p>
     </div>
   </div>
@@ -2375,7 +2385,7 @@
 
       <p style="text-align:center; margin-top:16px; font-size:12px; color:#64748b; line-height:1.5;">
         🔒 Por segurança, não dizemos se o e-mail existe ou não na base.<br>
-        Se você cadastrou esse e-mail, vai receber a mensagem em até 5 minutos.
+        Caso o serviço antigo não consiga enviar, utilize a opção de solicitar reativação ou recadastro.
       </p>
     </div>
   </div>
@@ -2422,16 +2432,16 @@
       <button class="recover-modal-close" type="button" onclick="fecharPagamentoPix()">✕</button>
       <div style="text-align:center; font-size:46px; margin-bottom:6px;">💠</div>
       <h3 style="text-align:center;">Nova Pesquisa DISC</h3>
-      <p class="recover-sub" style="text-align:center;">Para realizar uma nova avaliação, efetue o pagamento de:</p>
-      <div style="text-align:center; font-size:34px; font-weight:900; color:#063b7a; margin:8px 0 18px;">R$ 35,00</div>
-      <div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:12px; padding:16px; text-align:center; margin-bottom:14px;">
+      <p class="recover-sub" style="text-align:center;">O preço desta avaliação é definido na Central de Liberações pelo administrador. Não há cobrança ou gratuidade automática por esta tela.</p>
+      <div style="text-align:center; font-size:28px; font-weight:900; color:#063b7a; margin:8px 0 18px;">Consulte preço</div>
+      <div style="background:#eff6ff; border:1px solid #bfdbfe; border-radius:12px; padding:16px; text-align:center; margin-bottom:14px; display:none;" aria-hidden="true">
         <div style="font-size:12px; color:#475569; font-weight:800; text-transform:uppercase; letter-spacing:.06em;">Chave Pix · CNPJ</div>
         <div id="pix-key-value" style="font-size:21px; color:#063b7a; font-weight:900; letter-spacing:.04em; margin:7px 0;">60.317.056/0001-04</div>
         <button class="btn btn-primary" type="button" onclick="copiarChavePix()" style="margin:auto; padding:10px 18px; font-size:13px;">Copiar chave Pix</button>
       </div>
       <p id="pix-copy-status" style="text-align:center; min-height:20px; font-size:13px; color:#059669; margin:0 0 10px;"></p>
-      <p style="text-align:center; color:#64748b; font-size:13px; line-height:1.55; margin:0 0 16px;">Após o pagamento, clique no botão abaixo. Sua nova pesquisa será liberada após a confirmação.</p>
-      <button class="btn btn-primary" type="button" onclick="informarPagamentoPix()" style="width:100%; justify-content:center; padding:13px;">Já fiz o pagamento</button>
+      <p style="text-align:center; color:#64748b; font-size:13px; line-height:1.55; margin:0 0 16px;">Para realizar ou repetir a avaliação, consulte as condições com a administração do Instituto Impulso.</p>
+      <a class="btn btn-primary" href="mailto:impulsoflow@gmail.com?subject=Consulta%20de%20preco%20DISC" style="width:100%;justify-content:center;padding:13px;text-decoration:none;display:flex;">Consultar condições de pagamento</a>
     </div>
   </div>
 
@@ -6346,6 +6356,8 @@ async function enviarRecuperarPin() {
   const errEl = document.getElementById("recover-email-error");
   const statusEl = document.getElementById("recover-status");
   const btn = document.getElementById("btn-recuperar-pin");
+  const fallback=document.getElementById("recover-recadastro");
+  if(fallback)fallback.href="mailto:impulsoflow@gmail.com?subject="+encodeURIComponent("Impulso DISC — ativação ou recadastro")+"&body="+encodeURIComponent("Solicito conferência do meu cadastro e reativação do acesso DISC. E-mail usado: "+email+"\nNão desejo refazer a avaliação nem perder o histórico.\n");
 
   errEl.textContent = "";
   statusEl.textContent = "";
@@ -6365,17 +6377,14 @@ async function enviarRecuperarPin() {
   try {
     const resp = await callAppsScriptJsonp("recuperar_pin_360", { email: email });
     // Por segurança, sempre mostramos a mesma mensagem (não revelamos se o email existe)
-    statusEl.textContent = "✅ Se este e-mail estiver cadastrado, você receberá seu PIN em até 5 minutos. Verifique sua caixa de entrada e a pasta de spam.";
+    statusEl.textContent = "Solicitação recebida pelo serviço legado. Se a mensagem não chegar, use Ativar ou solicitar recadastro abaixo. O envio não pode ser confirmado por esta tela.";
     statusEl.className = "status status-success";
     btn.innerHTML = "✅ Enviado!";
-    setTimeout(() => {
-      fecharRecuperarPin();
-      btn.innerHTML = original;
-      btn.disabled = false;
-    }, 3500);
+    btn.innerHTML = original;
+    btn.disabled = false;
   } catch (err) {
     console.error("Erro recuperar PIN:", err);
-    statusEl.textContent = "⚠️ Não foi possível processar agora. Tente novamente em alguns minutos ou entre em contato com impulsoflow@gmail.com.";
+    statusEl.textContent = "O serviço antigo de recuperação não respondeu. Seu cadastro não foi apagado. Use o botão Ativar ou solicitar recadastro abaixo para pedir conferência do acesso, sem perder seu histórico.";
     statusEl.className = "status status-error";
     btn.innerHTML = original;
     btn.disabled = false;
