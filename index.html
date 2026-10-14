@@ -6375,7 +6375,7 @@ async function enviarRecuperarPin() {
   statusEl.className = "status status-pending";
 
   try {
-    const resp = await callAppsScriptJsonp("recuperar_pin_360", { email: email });
+    const resp = await callAppsScriptJsonp("recuperar_pin_360", { email: email }, 12000);
     // Por segurança, sempre mostramos a mesma mensagem (não revelamos se o email existe)
     statusEl.textContent = "Solicitação recebida pelo serviço legado. Se a mensagem não chegar, use Ativar ou solicitar recadastro abaixo. O envio não pode ser confirmado por esta tela.";
     statusEl.className = "status status-success";
