@@ -1228,14 +1228,27 @@ function breakdownByRelation(sessionId) {
 // ═══════════════════════════════════════════════════════════════════════
 // 🧮 CÁLCULOS DISC
 // ═══════════════════════════════════════════════════════════════════════
+// Contrato canônico DISC convidado v2: 24 itens, escala inteira 1–5.
+// Os itens 13–16 e 21–24 são invertidos; o mapa nunca vem do cliente.
+const DISC360_GUEST_SCORING_VERSION = "guest-24-v2-reverse8";
+const DISC360_GUEST_DIMS = Object.freeze([
+  "D","I","S","C","D","I","S","C","D","I","S","C",
+  "D","I","S","C","D","I","S","C","D","I","S","C"
+]);
+const DISC360_GUEST_REVERSED = Object.freeze([
+  false,false,false,false,false,false,false,false,
+  false,false,false,false,true,true,true,true,
+  false,false,false,false,true,true,true,true
+]);
 function calcDiscFromResponses(respostas) {
-  // Suporta 24 (convidado) e 48 (avaliado) respostas
-  const r = respostas || [];
+  if (!Array.isArray(respostas) || respostas.length !== 24 ||
+      !respostas.every(n => typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 5)) {
+    throw new Error("DISC 360: são obrigatórias 24 respostas inteiras na escala de 1 a 5.");
+  }
   const scores = { D: 0, I: 0, S: 0, C: 0 };
-  const dims = ["D", "I", "S", "C"];
-  for (let i = 0; i < r.length; i++) {
-    const dim = dims[i % 4];
-    scores[dim] += Number(r[i]) || 0;
+  for (let i = 0; i < 24; i++) {
+    const dim = DISC360_GUEST_DIMS[i];
+    scores[dim] += DISC360_GUEST_REVERSED[i] ? 6 - respostas[i] : respostas[i];
   }
   return scores;
 }
