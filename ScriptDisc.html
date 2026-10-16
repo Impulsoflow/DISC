@@ -1792,6 +1792,7 @@ function autorizarEmailDrive() {
 // Relatório 360: idempotência independente das respostas dos convidados.
 // COMPLETE significa aceito pelo GmailApp no servidor, NÃO entregue à caixa de entrada.
 function disc360OnceReport(payload, owner, operation) {
+  const action = payload.action === "relatorio_disc" ? "relatorio_disc" : "relatorio_360";
   const fingerprint = disc360GuestFingerprint(payload);
   const lock = LockService.getScriptLock();
   disc360GuestAssert(lock.tryLock(10000), "Servidor ocupado. Tente mais tarde com o mesmo requestId");
@@ -1805,7 +1806,7 @@ function disc360OnceReport(payload, owner, operation) {
     const entries = ledger.getDataRange().getValues();
     for (let i = 1; i < entries.length; i++) {
       if (String(entries[i][0]) !== payload.requestId) continue;
-      disc360GuestAssert(entries[i][1] === "relatorio_360" &&
+      disc360GuestAssert(entries[i][1] === action &&
         entries[i][2] === fingerprint && entries[i][6] === owner.sessionId,
         "requestId já utilizado com outra sessão, operação ou conteúdo");
       if (entries[i][3] === "COMPLETE") {
@@ -1813,7 +1814,7 @@ function disc360OnceReport(payload, owner, operation) {
       }
       throw new Error("Envio pendente de conciliação administrativa. Não gere outro requestId.");
     }
-    ledger.appendRow([payload.requestId, "relatorio_360", fingerprint, "PENDING", "", new Date(), owner.sessionId]);
+    ledger.appendRow([payload.requestId, action, fingerprint, "PENDING", "", new Date(), owner.sessionId]);
     SpreadsheetApp.flush();
     const ledgerRow = ledger.getLastRow();
     const response = operation(payload);
@@ -1854,11 +1855,12 @@ function handleGetOperation360Status(payload) {
     const owner = disc360RequireOwner(payload, payload && payload.sessionId);
     disc360GuestAssert(typeof payload.requestId === "string" &&
       /^[a-zA-Z0-9_-]{20,100}$/.test(payload.requestId), "requestId inválido");
+    const action = payload.reportType === "relatorio_disc" ? "relatorio_disc" : "relatorio_360";
     const ledger = getSpreadsheet().getSheetByName("Operacoes360");
     if (!ledger) return jsonResponse({ok: true, state: "NOT_FOUND"});
     const entries = ledger.getDataRange().getValues();
     for (let i = 1; i < entries.length; i++) {
-      if (String(entries[i][0]) !== payload.requestId || entries[i][1] !== "relatorio_360" ||
+      if (String(entries[i][0]) !== payload.requestId || entries[i][1] !== action ||
           String(entries[i][6] || "") !== String(owner.sessionId)) continue;
       return jsonResponse({
         ok: true, state: entries[i][3] === "COMPLETE" ? "ACCEPTED" : "PENDING",
@@ -1954,7 +1956,25 @@ function handleRelatorio360Original(payload) {
   }
 }
 
+// Relatório Geral DISC: autenticação do titular e mesmo controle de idempotência do 360.
 function handleRelatorioDisc(payload) {
+  try {
+    const owner = disc360RequireOwner(payload, payload && payload.sessionId);
+    disc360GuestAssert(typeof payload.requestId === "string" &&
+      /^[a-zA-Z0-9_-]{20,100}$/.test(payload.requestId), "requestId inválido");
+    disc360GuestAssert(typeof payload.pdfBase64 === "string" &&
+      payload.pdfBase64.length >= 8 && payload.pdfBase64.length <= 14000000 &&
+      /^[A-Za-z0-9+/]+={0,2}$/.test(payload.pdfBase64), "PDF inválido ou muito grande");
+    const bytes = Utilities.base64Decode(payload.pdfBase64);
+    disc360GuestAssert(bytes.length >= 5 && bytes.slice(0,5).map(x => x < 0 ? x + 256 : x).join(",") === "37,80,68,70,45",
+      "Anexo não é um PDF válido");
+    return disc360OnceReport(payload, owner, handleRelatorioDiscOriginal);
+  } catch (error) {
+    return jsonResponse({ok: false, error: error.message});
+  }
+}
+
+function handleRelatorioDiscOriginal(payload) {
   try {
     if (!payload || !payload.email || !payload.pdfBase64) {
       return jsonResponse({ ok: false, error: "PDF ou e-mail ausentes" });
