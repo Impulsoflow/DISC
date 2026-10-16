@@ -54,6 +54,7 @@ function doPost(e) {
       case "getStatus360":      return handleGetStatus360(payload);
       case "getReport360":      return handleGetReport360(payload);
       case "relatorio_360":     return handleRelatorio360(payload);
+      case "getOperation360Status": return handleGetOperation360Status(payload);
       case "relatorio_disc":    return handleRelatorioDisc(payload);
       case "validateInvite":    return handleValidateInvite(payload);
       case "consultar_360":     return handleConsultar360(payload);
@@ -138,6 +139,7 @@ function doGet(e) {
       case "getStatus360":      resultText = handleGetStatus360(payload).getContent(); break;
       case "getReport360":      resultText = handleGetReport360(payload).getContent(); break;
       case "relatorio_360":     resultText = handleRelatorio360(payload).getContent(); break;
+      case "getOperation360Status": resultText = handleGetOperation360Status(payload).getContent(); break;
       case "relatorio_disc":    resultText = handleRelatorioDisc(payload).getContent(); break;
       case "validateInvite":    resultText = handleValidateInvite(payload).getContent(); break;
       case "submitConvidado":   resultText = handleSubmitConvidado(payload).getContent(); break;
@@ -184,6 +186,7 @@ function isPublicActionAllowed(action) {
     "getStatus360",
     "getReport360",
     "relatorio_360",
+    "getOperation360Status",
     "relatorio_disc",
     "validateInvite",
     "consultar_360",
@@ -1785,7 +1788,90 @@ function autorizarEmailDrive() {
   return "OK - autorização Drive/Gmail concluída. Verifique o e-mail " + ADMIN_EMAIL;
 }
 
+
+// Relatório 360: idempotência independente das respostas dos convidados.
+// COMPLETE significa aceito pelo GmailApp no servidor, NÃO entregue à caixa de entrada.
+function disc360OnceReport(payload, owner, operation) {
+  const fingerprint = disc360GuestFingerprint(payload);
+  const lock = LockService.getScriptLock();
+  disc360GuestAssert(lock.tryLock(10000), "Servidor ocupado. Tente mais tarde com o mesmo requestId");
+  try {
+    const ss = getSpreadsheet();
+    let ledger = ss.getSheetByName("Operacoes360");
+    if (!ledger) {
+      ledger = ss.insertSheet("Operacoes360");
+      ledger.appendRow(["RequestId", "Action", "Fingerprint", "Status", "Response", "Timestamp", "SessionId"]);
+    }
+    const entries = ledger.getDataRange().getValues();
+    for (let i = 1; i < entries.length; i++) {
+      if (String(entries[i][0]) !== payload.requestId) continue;
+      disc360GuestAssert(entries[i][1] === "relatorio_360" &&
+        entries[i][2] === fingerprint && entries[i][6] === owner.sessionId,
+        "requestId já utilizado com outra sessão, operação ou conteúdo");
+      if (entries[i][3] === "COMPLETE") {
+        return jsonResponse(Object.assign({}, JSON.parse(entries[i][4]), {duplicate: true}));
+      }
+      throw new Error("Envio pendente de conciliação administrativa. Não gere outro requestId.");
+    }
+    ledger.appendRow([payload.requestId, "relatorio_360", fingerprint, "PENDING", "", new Date(), owner.sessionId]);
+    SpreadsheetApp.flush();
+    const ledgerRow = ledger.getLastRow();
+    const response = operation(payload);
+    const result = JSON.parse(response.getContent());
+    if (result.ok === true) {
+      const receipt = Object.assign({}, result, {
+        requestId: payload.requestId, emailAccepted: true
+      });
+      ledger.getRange(ledgerRow, 4, 1, 2).setValues([["COMPLETE", JSON.stringify(receipt)]]);
+      SpreadsheetApp.flush();
+      return jsonResponse(receipt);
+    }
+    return response;
+  } finally {
+    lock.releaseLock();
+  }
+}
 function handleRelatorio360(payload) {
+  try {
+    const owner = disc360RequireOwner(payload, payload && payload.sessionId);
+    disc360GuestAssert(countConvidados(owner.sessionId) >= MIN_AVALIACOES_360,
+      "Avaliações insuficientes para gerar relatório");
+    disc360GuestAssert(typeof payload.requestId === "string" &&
+      /^[a-zA-Z0-9_-]{20,100}$/.test(payload.requestId), "requestId inválido");
+    disc360GuestAssert(typeof payload.pdfBase64 === "string" &&
+      payload.pdfBase64.length >= 8 && payload.pdfBase64.length <= 14000000 &&
+      /^[A-Za-z0-9+/]+={0,2}$/.test(payload.pdfBase64), "PDF inválido ou muito grande");
+    const bytes = Utilities.base64Decode(payload.pdfBase64);
+    disc360GuestAssert(bytes.length >= 5 && bytes.slice(0,5).map(x => x < 0 ? x + 256 : x).join(",") === "37,80,68,70,45",
+      "Anexo não é um PDF válido");
+    return disc360OnceReport(payload, owner, handleRelatorio360Original);
+  } catch (error) {
+    return jsonResponse({ok: false, error: error.message});
+  }
+}
+function handleGetOperation360Status(payload) {
+  try {
+    const owner = disc360RequireOwner(payload, payload && payload.sessionId);
+    disc360GuestAssert(typeof payload.requestId === "string" &&
+      /^[a-zA-Z0-9_-]{20,100}$/.test(payload.requestId), "requestId inválido");
+    const ledger = getSpreadsheet().getSheetByName("Operacoes360");
+    if (!ledger) return jsonResponse({ok: true, state: "NOT_FOUND"});
+    const entries = ledger.getDataRange().getValues();
+    for (let i = 1; i < entries.length; i++) {
+      if (String(entries[i][0]) !== payload.requestId || entries[i][1] !== "relatorio_360" ||
+          String(entries[i][6] || "") !== String(owner.sessionId)) continue;
+      return jsonResponse({
+        ok: true, state: entries[i][3] === "COMPLETE" ? "ACCEPTED" : "PENDING",
+        emailAccepted: entries[i][3] === "COMPLETE", requestId: payload.requestId
+      });
+    }
+    return jsonResponse({ok: true, state: "NOT_FOUND"});
+  } catch (error) {
+    return jsonResponse({ok: false, error: error.message});
+  }
+}
+
+function handleRelatorio360Original(payload) {
   try {
     if (!payload || !payload.email || !payload.pdfBase64) {
       return jsonResponse({ ok: false, error: "PDF ou e-mail ausentes" });
