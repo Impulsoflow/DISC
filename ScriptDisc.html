@@ -257,7 +257,101 @@ function disc360VerifySignedCentralGrant(payload) {
     accessNonce: claim.nonce, clientId: claim.clientId};
 }
 
+// Receptor DISC: confirma a autorização na D1 ANTES do salvamento e a
+// consome DEPOIS da escrita confirmada. Valores confidenciais só em ScriptProperties.
+function disc360CentralServerRequest(action, payload) {
+  if (action !== "validate" && action !== "complete") throw new Error("Ação de autorização desconhecida");
+  const props = PropertiesService.getScriptProperties();
+  const url = String(props.getProperty("IMPULSO_DISC_INTERNAL_URL") || "");
+  const secret = String(props.getProperty("IMPULSO_DISC_SCRIPT_SHARED_SECRET") || "");
+  if (!/^https:\/\/[^\s/?#]+\/api\/internal\/disc-access$/.test(url) || secret.length < 32) {
+    throw new Error("Integração DISC com a Central não configurada no servidor");
+  }
+  const response = UrlFetchApp.fetch(url, {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify({
+      action: action,
+      grant: payload.centralAccessGrant,
+      submissionId: payload.requestId,
+      email: String(payload.email || "").trim().toLowerCase()
+    }),
+    headers: {Authorization: "Bearer " + secret},
+    muteHttpExceptions: true
+  });
+  const status = response.getResponseCode();
+  let receipt = null;
+  try { receipt = JSON.parse(response.getContentText()); } catch (e) {}
+  if (status !== 200 || !receipt || receipt.ok !== true ||
+      (action === "validate" && receipt.phase !== "INICIADO") ||
+      (action === "complete" && receipt.phase !== "UTILIZADO")) {
+    throw new Error("Central não confirmou " + action + " da autorização DISC (HTTP " + status + ")");
+  }
+  return receipt;
+}
+
+function disc360OnceSelfDisc(payload, operation) {
+  if (!payload || typeof payload !== "object" ||
+      typeof payload.requestId !== "string" ||
+      !/^[a-zA-Z0-9_-]{20,100}$/.test(payload.requestId)) {
+    throw new Error("requestId obrigatório no salvamento DISC");
+  }
+  const grant = disc360VerifySignedCentralGrant(payload);
+  const fingerprint = disc360GuestFingerprint(payload);
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) throw new Error("Servidor ocupado; tente novamente com o mesmo requestId");
+  try {
+    const spreadsheet = getSpreadsheet();
+    let ledger = spreadsheet.getSheetByName("Operacoes360");
+    if (!ledger) {
+      ledger = spreadsheet.insertSheet("Operacoes360");
+      ledger.appendRow(["RequestId", "Action", "Fingerprint", "Status", "Response", "Timestamp", "GrantNonce"]);
+    }
+    const values = ledger.getDataRange().getValues();
+    for (let i = 1; i < values.length; i++) {
+      if (String(values[i][0]) === payload.requestId) {
+        if (values[i][1] !== "saveDisc" || values[i][2] !== fingerprint ||
+            values[i][6] !== grant.accessNonce) {
+          throw new Error("requestId reutilizado com outro resultado");
+        }
+        if (values[i][3] === "COMPLETE") {
+          return jsonResponse(Object.assign({}, JSON.parse(values[i][4]), {duplicate: true}));
+        }
+        throw new Error("Salvamento anterior pendente de conciliação; não gere um novo requestId");
+      }
+      if (values[i][1] === "saveDisc" && String(values[i][6]) === grant.accessNonce) {
+        throw new Error("Autorização DISC já vinculada a outra tentativa");
+      }
+    }
+    disc360CentralServerRequest("validate", payload);
+    ledger.appendRow([payload.requestId, "saveDisc", fingerprint, "PENDING", "", new Date(), grant.accessNonce]);
+    SpreadsheetApp.flush();
+    const row = ledger.getLastRow();
+    const result = operation(payload);
+    const parsed = JSON.parse(result.getContent());
+    if (!parsed.ok || !parsed.sessionId) {
+      throw new Error("Salvamento não confirmado; tentativa pendente de conciliação");
+    }
+    // A gravação já ocorreu. Se o consumo na Central falhar, não repetir:
+    // PENDING requer conciliação administrativa, nunca reexecutar o salvamento.
+    disc360CentralServerRequest("complete", payload);
+    ledger.getRange(row, 4, 1, 2).setValues([["COMPLETE", JSON.stringify(parsed)]]);
+    SpreadsheetApp.flush();
+    return result;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function handleSaveDisc(payload) {
+  try {
+    return disc360OnceSelfDisc(payload, handleSaveDiscOriginal);
+  } catch (err) {
+    return jsonResponse({ok:false, error:err.message});
+  }
+}
+
+function handleSaveDiscOriginal(payload) {
   try {
     const ss = getSpreadsheet();
     let sheet = ss.getSheetByName(ABA_DISC);
