@@ -5637,29 +5637,13 @@ async function autoSendResult(scores, ranked) {
       throw new Error((saved && saved.error) || "A planilha não confirmou o salvamento do resultado.");
     }
 
-    // A cobrança/uso já foi registrado antes do questionário. A finalização na
-    // Central acontece pelo mesmo navegador (sem depender de permissão extra
-    // do Apps Script) e nunca desfaz um resultado já salvo.
-    let centralCompletionError = null;
-    try {
-      const completedAccess = await postCentralAccess({ action: "start", grant: discAccessGrant });
-      if (!completedAccess.started || completedAccess.phase !== "UTILIZADO") {
-        throw new Error((completedAccess && completedAccess.error) || "A Central não confirmou a finalização.");
-      }
-    } catch (completionError) {
-      centralCompletionError = completionError;
-      console.warn("Resultado DISC salvo; confirmação final da Central pendente:", completionError);
-    }
-
+    // O servidor Apps Script validou e consumiu a autorização na Central
+    // antes de devolver sessionId. Não consumir novamente pelo navegador.
     autoSendDone = true;
+    resetDisc360RequestId("saveDisc", (payload.email || "") + "_" + (signupPin || _as.pin || ""));
     discAccessGrant = "";
     discRetakeAuthorized = false;
-    setAutoSendStatus(
-      centralCompletionError
-        ? "✅ Resultado salvo com segurança. A confirmação administrativa será conciliada automaticamente."
-        : "✅ Resultado confirmado na planilha. Processando o envio do PDF...",
-      "success"
-    );
+    setAutoSendStatus("✅ Resultado confirmado na planilha e na Central. Gerando o PDF...", "success");
     document.getElementById("final-success-message").style.display = "block";
 
     // O resultado já está confirmado. Somente agora geramos o PDF. Em celulares,
@@ -5671,7 +5655,7 @@ async function autoSendResult(scores, ranked) {
       const reportRequest = {
         apiKey: API_KEY,
         action: "relatorio_disc",
-        requestId: getOrCreateDisc360RequestId("relatorioDisc", saved.sessionId + "_" + pin),
+        requestId: getOrCreateDisc360RequestId("relatorioDisc", saved.sessionId + "_" + (saved.pin || signupPin || "")),
         nome: payload.nome,
         email: payload.email,
         sessionId: saved.sessionId,
@@ -5685,7 +5669,7 @@ async function autoSendResult(scores, ranked) {
       const pdfReceipt = await aguardarReciboPdf360(reportRequest);
       if (pdfReceipt && pdfReceipt.ok && pdfReceipt.state === "ACCEPTED") {
         setAutoSendStatus("✅ DISC salvo. Solicitação de e-mail aceita pelo servidor; entrega não garantida.", "success");
-        resetDisc360RequestId("relatorioDisc", saved.sessionId + "_" + pin);
+        resetDisc360RequestId("relatorioDisc", saved.sessionId + "_" + (saved.pin || signupPin || ""));
       } else {
         setAutoSendStatus("✅ DISC salvo. PDF gerado, mas o envio por e-mail ainda não foi confirmado.", "pending");
       }
