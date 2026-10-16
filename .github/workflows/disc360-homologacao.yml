@@ -37,6 +37,7 @@ jobs:
           node --check /tmp/disc360-inline.js
           node tests/disc360-reverse-scoring.test.cjs
           node tests/disc360-backend-guards.test.cjs
+          node tests/disc360-central-grant.test.cjs
           node --test tests/access-flow.test.mjs
       - name: Lembrete de gate antes do deploy
         run: |
