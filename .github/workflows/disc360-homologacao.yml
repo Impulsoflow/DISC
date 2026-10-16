@@ -31,8 +31,8 @@ jobs:
           import re
           from pathlib import Path
           html = Path('index.html').read_text(encoding='utf-8')
-          blocks = re.findall(r'<script(?:\\s[^>]*)?>(.*?)</script>', html, re.I | re.S)
-          Path('/tmp/disc360-inline.js').write_text('\\n'.join(blocks), encoding='utf-8')
+          blocks = re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>', html, re.I | re.S)
+          Path('/tmp/disc360-inline.js').write_text('\n'.join(blocks), encoding='utf-8')
           PY
           node --check /tmp/disc360-inline.js
           node tests/disc360-reverse-scoring.test.cjs
