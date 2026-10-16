@@ -18,9 +18,11 @@ test("records access before showing the DISC questionnaire", () => {
   assert.match(page, /startedAccess\.phase !== "INICIADO"/);
 });
 
-test("accepts one Central-approved retake and finalizes in the client after saving", () => {
+test("requires server-verified signed Central grant and prevents forged retakes", () => {
   assert.match(script, /legacyAccess\.hasPreviousResult && !access\.retakeAuthorized && !legacyAccess\.allowed/);
-  assert.match(script, /retakeAuthorized: payload\.centralRetakeAuthorized === true/);
+  assert.match(script, /const access = disc360VerifySignedCentralGrant\(payload\)/);
+  assert.match(script, /computeHmacSha256Signature/);
+  assert.doesNotMatch(script, /retakeAuthorized: payload\.centralRetakeAuthorized === true/);
   assert.match(page, /action: "start", grant: discAccessGrant/);
   assert.match(page, /completedAccess\.phase !== "UTILIZADO"/);
 });
