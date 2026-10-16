@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const path = require('node:path');
-const src = fs.readFileSync(path.join(__dirname, '..', 'ScriptDisc.html'), 'utf8');
+const src = fs.readFileSync(path.join(__dirname, '..', 'ScriptDisc.html'),'utf8');
 const fresh = () => {
   const rows = []; const stats={saved:0,mailed:0,unlocked:0,reads:0};
   let ledgerExists=false;
@@ -19,7 +19,8 @@ const fresh = () => {
     SpreadsheetApp:{flush(){}},
     Utilities:{DigestAlgorithm:{SHA_256:'SHA256'},Charset:{UTF_8:'UTF_8'},
       computeDigest(_algo,s){return [...crypto.createHash('sha256').update(s).digest()];},
-      base64EncodeWebSafe(d){return Buffer.from(d).toString('base64url');}},
+      base64EncodeWebSafe(d){return Buffer.from(d).toString('base64url');},
+      base64Decode(s){return [...Buffer.from(s,'base64')];}},
   };
   vm.createContext(ctx); vm.runInContext(src,ctx);
   ctx.jsonResponse = x=>({getContent(){return JSON.stringify(x);}});
@@ -104,3 +105,34 @@ check('relatorio_360 exige mínimo antes de anexar',()=>{
  assert.equal(r.ok,false);assert.match(r.error,/insuficientes/);
 });
 console.log('TOTAL: '+passed+' testes isolados, serviços externos mockados.');
+
+check('relatorio_360 responde com recibo e evita envio em duplicidade',()=>{
+  const s=fresh();s.ctx.countConvidados=()=>3;
+  s.ctx.handleRelatorio360Original=()=>{s.stats.mailed++;return s.ctx.jsonResponse({ok:true,message:'accepted'});};
+  const p={requestId:'disc360_report_test_11111111111',sessionId:'session-one',
+    email:s.owner.email,pin:s.owner.pin,pdfBase64:Buffer.from('%PDF-1.7').toString('base64')};
+  const a=data(s.ctx.handleRelatorio360(p));
+  assert.equal(a.ok,true);assert.equal(a.emailAccepted,true);
+  assert.equal(s.rows[1][3],'COMPLETE');
+  const b=data(s.ctx.handleRelatorio360(p));assert.equal(b.duplicate,true);
+  assert.equal(s.stats.mailed,1);
+  const receipt=data(s.ctx.handleGetOperation360Status({requestId:p.requestId,sessionId:p.sessionId,email:p.email,pin:p.pin}));
+  assert.equal(receipt.state,'ACCEPTED');assert.equal(receipt.emailAccepted,true);
+  const wrong=data(s.ctx.handleGetOperation360Status({requestId:p.requestId,sessionId:'session-other',email:p.email,pin:p.pin}));
+  assert.equal(wrong.ok,false);
+});
+check('PDF recusado se não tiver assinatura %PDF-',()=>{
+  const s=fresh();s.ctx.countConvidados=()=>3;
+  const p={requestId:'disc360_report_test_22222222222',sessionId:'session-one',email:s.owner.email,pin:s.owner.pin,
+    pdfBase64:Buffer.from('not pdf').toString('base64')};
+  assert.equal(data(s.ctx.handleRelatorio360(p)).ok,false);assert.equal(s.rows.length,0);
+});
+check('PDF com falha parcial mantém PENDING e impede reenvio',()=>{
+  const s=fresh();s.ctx.countConvidados=()=>3;
+  s.ctx.handleRelatorio360Original=()=>{s.stats.mailed++;throw Error('network interruption');};
+  const p={requestId:'disc360_report_test_33333333333',sessionId:'session-one',
+    email:s.owner.email,pin:s.owner.pin,pdfBase64:Buffer.from('%PDF-1.7').toString('base64')};
+  assert.equal(data(s.ctx.handleRelatorio360(p)).ok,false);
+  assert.equal(data(s.ctx.handleRelatorio360(p)).ok,false);
+  assert.equal(s.stats.mailed,1);assert.equal(s.rows[1][3],'PENDING');
+});
