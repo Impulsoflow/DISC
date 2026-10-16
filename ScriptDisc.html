@@ -697,7 +697,98 @@ function handleValidateInvite(payload) {
 // ═══════════════════════════════════════════════════════════════════════
 // 4️⃣ CONVIDADO ENVIA RESPOSTA  🆕 CORRIGIDO — aceita sessionId OU pin
 // ═══════════════════════════════════════════════════════════════════════
+
+// DISC 360° — segurança de escrita e idempotência de convidados (candidato de homologação).
+// O requestId precisa persistir no cliente ao repetir a mesma tentativa.
+function disc360GuestAssert(ok, message) {
+  if (!ok) throw new Error(message);
+}
+function disc360ValidateGuestSubmission(payload) {
+  disc360GuestAssert(payload && typeof payload === "object", "Payload de convidado inválido");
+  disc360GuestAssert(typeof payload.requestId === "string" &&
+    /^[a-zA-Z0-9_-]{20,100}$/.test(payload.requestId), "requestId inválido");
+  disc360GuestAssert(Array.isArray(payload.respostas) && payload.respostas.length === 24 &&
+    payload.respostas.every(n => Number.isInteger(n) && n >= 1 && n <= 5),
+    "As 24 respostas DISC devem ser inteiros entre 1 e 5");
+  disc360GuestAssert(Array.isArray(payload.premium) && payload.premium.length === 12 &&
+    payload.premium.every(n => Number.isInteger(n) && n >= 1 && n <= 5),
+    "As 12 respostas de liderança devem ser inteiros entre 1 e 5");
+  disc360GuestAssert(typeof payload.relacao === "string" && payload.relacao.trim().length > 0,
+    "Relação obrigatória");
+  disc360GuestAssert(typeof payload.tempoConvivencia === "string" && payload.tempoConvivencia.trim().length > 0,
+    "Tempo de convivência obrigatório");
+  let session = payload.codigo ? findSessionByCodigo(payload.codigo) : null;
+  if (!session && payload.sessionId) session = findSession(payload.sessionId);
+  if (!session && payload.pin) session = findSessionByPin(payload.pin);
+  disc360GuestAssert(session && session.status === "ativo", "Sessão inválida ou encerrada");
+  if (payload.sessionId) {
+    disc360GuestAssert(String(payload.sessionId) === String(session.sessionId),
+      "Identificadores de sessão divergentes");
+  }
+  if (session.dataLimite) {
+    const expiry = new Date(session.dataLimite).getTime();
+    disc360GuestAssert(Number.isFinite(expiry) && expiry >= Date.now(), "Convite expirado");
+  }
+  return session;
+}
+function disc360GuestFingerprint(payload) {
+  const normalized = {};
+  Object.keys(payload).sort().forEach(key => {
+    if (key !== "apiKey" && key !== "requestId" && key !== "discScoringMap") {
+      normalized[key] = payload[key];
+    }
+  });
+  const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
+    JSON.stringify(normalized), Utilities.Charset.UTF_8);
+  return Utilities.base64EncodeWebSafe(digest);
+}
+function disc360OnceGuest(payload, operation) {
+  // Verifica tudo antes de criar marcador PENDING ou qualquer linha de resposta.
+  disc360ValidateGuestSubmission(payload);
+  const fingerprint = disc360GuestFingerprint(payload);
+  const lock = LockService.getScriptLock();
+  disc360GuestAssert(lock.tryLock(10000), "Servidor ocupado. Reenvie com o mesmo requestId");
+  try {
+    const ss = getSpreadsheet();
+    let ledger = ss.getSheetByName("Operacoes360");
+    if (!ledger) {
+      ledger = ss.insertSheet("Operacoes360");
+      ledger.appendRow(["RequestId", "Action", "Fingerprint", "Status", "Response", "Timestamp"]);
+    }
+    const entries = ledger.getDataRange().getValues();
+    for (let i = 1; i < entries.length; i++) {
+      if (String(entries[i][0]) !== payload.requestId) continue;
+      disc360GuestAssert(entries[i][1] === "submitConvidado" && entries[i][2] === fingerprint,
+        "requestId já utilizado para outra operação ou conteúdo");
+      if (entries[i][3] === "COMPLETE") {
+        const prev = JSON.parse(entries[i][4]);
+        return jsonResponse(Object.assign({}, prev, {duplicate: true}));
+      }
+      throw new Error("Tentativa pendente de conciliação administrativa; não altere o requestId.");
+    }
+    ledger.appendRow([payload.requestId, "submitConvidado", fingerprint, "PENDING", "", new Date()]);
+    SpreadsheetApp.flush();
+    const ledgerRow = ledger.getLastRow();
+    const response = operation(payload);
+    const result = JSON.parse(response.getContent());
+    if (result.ok === true) {
+      ledger.getRange(ledgerRow, 4, 1, 2).setValues([["COMPLETE", JSON.stringify(result)]]);
+      SpreadsheetApp.flush();
+    }
+    return response;
+  } finally {
+    lock.releaseLock();
+  }
+}
 function handleSubmitConvidado(payload) {
+  try {
+    return disc360OnceGuest(payload, handleSubmitConvidadoOriginal);
+  } catch (error) {
+    return jsonResponse({ok: false, error: error.message});
+  }
+}
+
+function handleSubmitConvidadoOriginal(payload) {
   try {
     // 🆕 Prioriza CÓDIGO 360° (DISC-XXXXX); cai para sessionId; cai para PIN
     let session = null;
@@ -823,9 +914,24 @@ function handleLoginAvaliado(payload) {
 // ═══════════════════════════════════════════════════════════════════════
 // 6️⃣ STATUS DA AVALIAÇÃO
 // ═══════════════════════════════════════════════════════════════════════
+
+// A chave incorporada ao HTML público NÃO autentica o titular.
+// Para ler resultados, conferir sempre e-mail+PIN e vincular à sessão solicitada.
+function disc360RequireOwner(payload, requiredSessionId) {
+  disc360GuestAssert(payload && typeof payload === "object", "Credenciais ausentes");
+  const email = String(payload.email || "").trim().toLowerCase();
+  const pin = String(payload.pin || "").trim();
+  disc360GuestAssert(email && pin, "E-mail e PIN obrigatórios");
+  const owner = findSessionByEmailAndPin(email, pin);
+  disc360GuestAssert(owner, "E-mail ou PIN inválidos");
+  disc360GuestAssert(requiredSessionId && String(owner.sessionId) === String(requiredSessionId),
+    "Acesso negado: sessão não pertence ao titular");
+  return owner;
+}
+
 function handleGetStatus360(payload) {
   try {
-    const session = findSession(payload.sessionId);
+    const session = disc360RequireOwner(payload, payload && payload.sessionId);
     if (!session) return jsonResponse({ ok: false, error: "Sessão não encontrada" });
 
     const totalRespostas = countConvidados(payload.sessionId);
@@ -851,7 +957,7 @@ function handleGetStatus360(payload) {
 // ═══════════════════════════════════════════════════════════════════════
 function handleGetReport360(payload) {
   try {
-    const session = findSession(payload.sessionId);
+    const session = disc360RequireOwner(payload, payload && payload.sessionId);
     if (!session) return jsonResponse({ ok: false, error: "Sessão não encontrada" });
 
     const respostas = getAllConvidados(payload.sessionId);
@@ -1685,6 +1791,11 @@ function handleRelatorio360(payload) {
       return jsonResponse({ ok: false, error: "PDF ou e-mail ausentes" });
     }
 
+    const owner = disc360RequireOwner(payload, payload.sessionId);
+    disc360GuestAssert(countConvidados(owner.sessionId) >= MIN_AVALIACOES_360,
+      "Avaliações insuficientes para gerar relatório");
+    disc360GuestAssert(typeof payload.pdfBase64 === "string" && payload.pdfBase64.length <= 14000000 &&
+      /^[A-Za-z0-9+/]+={0,2}$/.test(payload.pdfBase64), "PDF inválido ou muito grande");
     const reportFileName = payload.pdfFileName || "Relatorio360.pdf";
     const pdfBlob = makePdfBlob(payload.pdfBase64, reportFileName);
     let reportLink = "";
