@@ -137,7 +137,7 @@ check('PDF com falha parcial mantém PENDING e impede reenvio',()=>{
   assert.equal(s.stats.mailed,1);assert.equal(s.rows[1][3],'PENDING');
 });
 
-test('relatorio_disc: e-mail aceito uma vez e recibo exclusivo do titular',()=>{
+check('relatorio_disc: e-mail aceito uma vez e recibo exclusivo do titular',()=>{
   const s=fresh();s.ctx.handleRelatorioDiscOriginal=()=>{s.stats.mailed++;return s.ctx.jsonResponse({ok:true,message:'accepted'});};
   const p={action:'relatorio_disc',requestId:'disc360_general_test_11111111111',sessionId:'session-one',
     email:s.owner.email,pin:s.owner.pin,pdfBase64:Buffer.from('%PDF-1.7').toString('base64')};
@@ -147,7 +147,7 @@ test('relatorio_disc: e-mail aceito uma vez e recibo exclusivo do titular',()=>{
   assert.equal(data(s.ctx.handleGetOperation360Status({reportType:'relatorio_disc',requestId:p.requestId,sessionId:p.sessionId,email:p.email,pin:p.pin})).state,'ACCEPTED');
   assert.equal(data(s.ctx.handleGetOperation360Status({reportType:'relatorio_360',requestId:p.requestId,sessionId:p.sessionId,email:p.email,pin:p.pin})).state,'NOT_FOUND');
 });
-test('relatorio_disc: impede terceiro antes de chamar Gmail/Drive',()=>{
+check('relatorio_disc: impede terceiro antes de chamar Gmail/Drive',()=>{
   const s=fresh();let sent=0;s.ctx.handleRelatorioDiscOriginal=()=>{sent++;return s.ctx.jsonResponse({ok:true})};
   const p={action:'relatorio_disc',requestId:'disc360_general_test_22222222222',sessionId:'session-one',
     email:'third-party@example.invalid',pin:'000000',pdfBase64:Buffer.from('%PDF-1.7').toString('base64')};
