@@ -6722,6 +6722,27 @@ function resetDisc360RequestId(scope, seed) {
   try { localStorage.removeItem("disc360_request_" + safeScope + "_" + safeSeed); } catch (e) {}
 }
 
+// O formulário oculto não fornece confirmação verificável.
+// Consulta recibo no servidor sem tratar entrega ao Gmail como entrega ao destinatário.
+async function aguardarReciboPdf360(payload) {
+  for (let attempt = 0; attempt < 7; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    try {
+      const receipt = await callAppsScriptJsonp("getOperation360Status", {
+        email: payload.email, pin: payload.pin,
+        sessionId: payload.sessionId, requestId: payload.requestId
+      }, 10000);
+      if (receipt && receipt.ok && receipt.state === "ACCEPTED") return receipt;
+      if (receipt && receipt.ok && receipt.state === "PENDING") continue;
+      if (receipt && receipt.ok && receipt.state === "NOT_FOUND") continue;
+      if (receipt && receipt.ok === false) return receipt;
+    } catch (error) {
+      console.warn("Consulta de recibo 360 temporariamente indisponível");
+    }
+  }
+  return null;
+}
+
 /* ---------- Relatório 360° (PDF) ---------- */
 async function gerarRelatorio360() {
   if (!dadosPainel360) return;
@@ -6757,12 +6778,21 @@ async function gerarRelatorio360() {
     doc.save(`Relatorio360_${safeName}.pdf`);
     try {
       await postResultToScript(payload);
-      status.textContent = "PDF gerado e download iniciado. O envio por e-mail foi solicitado, mas ainda não foi confirmado pelo servidor.";
+      status.textContent = "PDF gerado. Verificando o recibo de processamento do servidor...";
+      const receipt = await aguardarReciboPdf360(payload);
+      if (receipt && receipt.ok && receipt.state === "ACCEPTED") {
+        status.textContent = "PDF gerado e solicitação aceita pelo Gmail. A entrega à caixa de entrada ainda depende do provedor de e-mail.";
+        status.className = "status status-success";
+        resetDisc360RequestId("relatorio360", (dadosPainel360.sessionId || dadosPainel360.email || "") + "_" + (dadosPainel360.pin || ""));
+      } else {
+        status.textContent = "PDF disponível para download. O envio por e-mail não foi confirmado: verifique o painel ou solicite conferência antes de repetir.";
+        status.className = "status status-pending";
+      }
     } catch (sendError) {
       console.warn("Envio do relatório não confirmado:", sendError);
-      status.textContent = "PDF gerado e download iniciado. Não foi possível solicitar o envio por e-mail.";
+      status.textContent = "PDF disponível para download, mas não foi possível confirmar o envio por e-mail.";
+      status.className = "status status-pending";
     }
-    status.className = "status status-pending";
     btn.disabled = false;
     btn.innerHTML = "📄 Gerar Relatório Comparativo (PDF)";
 
