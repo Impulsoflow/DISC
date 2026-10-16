@@ -212,27 +212,59 @@ function sendAdminEmail(subject, body, options) {
 // ═══════════════════════════════════════════════════════════════════════
 // 1️⃣ DISC ORIGINAL — SALVAMENTO + EMAIL
 // ═══════════════════════════════════════════════════════════════════════
+// Contrato assinado pela Central Impulso (lib/research-access.ts).
+// Exige segredo configurado apenas em Script Properties do ambiente correto.
+// Não confirma, por si só, que o nonce foi consumido na D1: isso exige etapa
+// complementar servidor-servidor antes da publicação comercial.
+function disc360VerifySignedCentralGrant(payload) {
+  if (!payload || typeof payload !== "object") throw new Error("Solicitação inválida");
+  const grant = String(payload.centralAccessGrant || "").trim();
+  const parts = grant.split(".");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new Error("Autorização da Central inválida ou ausente");
+  }
+  const secret = PropertiesService.getScriptProperties().getProperty("IMPULSO_DISC_ACCESS_HMAC_SECRET");
+  if (!secret || secret.length < 32) {
+    throw new Error("Assinatura da Central não configurada no servidor");
+  }
+  const computed = Utilities.base64EncodeWebSafe(
+    Utilities.computeHmacSha256Signature(parts[0], secret, Utilities.Charset.UTF_8)
+  ).replace(/=+$/, "");
+  // Comparação por conteúdo sem saída prematura dependente do caractere.
+  if (computed.length !== parts[1].length) throw new Error("Assinatura inválida");
+  let mismatch = 0;
+  for (let i = 0; i < computed.length; i++) {
+    mismatch |= computed.charCodeAt(i) ^ parts[1].charCodeAt(i);
+  }
+  if (mismatch !== 0) throw new Error("Assinatura inválida");
+  const bytes = Utilities.base64DecodeWebSafe(parts[0]);
+  const claim = JSON.parse(Utilities.newBlob(bytes).getDataAsString("UTF-8"));
+  if (claim.researchId !== "disc" ||
+      typeof claim.nonce !== "string" || claim.nonce.length < 20 ||
+      typeof claim.clientId !== "string" || claim.clientId.length < 4 ||
+      !Number.isFinite(Number(claim.exp)) || Date.now() >= Number(claim.exp)) {
+    throw new Error("Autorização inválida, expirada ou destinada a outra pesquisa");
+  }
+  const email = String(payload.email || "").trim().toLowerCase();
+  const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, email, Utilities.Charset.UTF_8);
+  const emailHash = digest.map(function(b) {
+    return ("0" + (b < 0 ? b + 256 : b).toString(16)).slice(-2);
+  }).join("");
+  if (!email || emailHash !== claim.emailHash) {
+    throw new Error("Autorização não pertence ao participante");
+  }
+  return {allowed: true, retakeAuthorized: claim.requestId !== null && claim.requestId !== undefined,
+    accessNonce: claim.nonce, clientId: claim.clientId};
+}
+
 function handleSaveDisc(payload) {
   try {
     const ss = getSpreadsheet();
     let sheet = ss.getSheetByName(ABA_DISC);
 
-    const centralGrant = String(payload.centralAccessGrant || "").trim();
-    if (!centralGrant) {
-      return jsonResponse({
-        ok: false,
-        retakeRequired: true,
-        error: "Autorização ausente ou expirada. Reinicie a pesquisa pela tela inicial."
-      });
-    }
-
-    // A Central já registrou o início antes do questionário. Nesta etapa o
-    // Apps Script apenas persiste o resultado: ele não depende de uma chamada
-    // externa para não travar um cliente que já concluiu a pesquisa.
-    const access = {
-      allowed: true,
-      retakeAuthorized: payload.centralRetakeAuthorized === true
-    };
+    // Validação real do HMAC da Central Impulso, nunca confiar no navegador.
+    // Sem propriedade segura de implantação, falhar fechado.
+    const access = disc360VerifySignedCentralGrant(payload);
 
     const legacyAccess = getDiscRetakeEligibility(payload);
     if (legacyAccess.hasPreviousResult && !access.retakeAuthorized && !legacyAccess.allowed) {
