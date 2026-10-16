@@ -5668,9 +5668,10 @@ async function autoSendResult(scores, ranked) {
       setAutoSendStatus("✅ Resultado confirmado. Gerando o PDF para envio...", "success");
       const doc = await generatePDF(scores, ranked);
       const base64 = doc.output("datauristring").split(",")[1];
-      await postResultToScript({
+      const reportRequest = {
         apiKey: API_KEY,
         action: "relatorio_disc",
+        requestId: getOrCreateDisc360RequestId("relatorioDisc", saved.sessionId + "_" + pin),
         nome: payload.nome,
         email: payload.email,
         sessionId: saved.sessionId,
@@ -5679,8 +5680,15 @@ async function autoSendResult(scores, ranked) {
         pdfFileName: `ImpulsoDisc_${safeName}.pdf`,
         sendEmail: true,
         notifyAdmin: true
-      });
-      setAutoSendStatus("✅ Resultado salvo. PDF enviado para processamento.", "success");
+      };
+      await postResultToScript(reportRequest);
+      const pdfReceipt = await aguardarReciboPdf360(reportRequest);
+      if (pdfReceipt && pdfReceipt.ok && pdfReceipt.state === "ACCEPTED") {
+        setAutoSendStatus("✅ DISC salvo. Solicitação de e-mail aceita pelo servidor; entrega não garantida.", "success");
+        resetDisc360RequestId("relatorioDisc", saved.sessionId + "_" + pin);
+      } else {
+        setAutoSendStatus("✅ DISC salvo. PDF gerado, mas o envio por e-mail ainda não foi confirmado.", "pending");
+      }
     } catch (pdfError) {
       console.error("Resultado salvo, mas o envio do PDF falhou:", pdfError);
       setAutoSendStatus("✅ Resultado salvo na planilha. O PDF não foi enviado, mas sua pesquisa está segura.", "success");
@@ -6730,7 +6738,8 @@ async function aguardarReciboPdf360(payload) {
     try {
       const receipt = await callAppsScriptJsonp("getOperation360Status", {
         email: payload.email, pin: payload.pin,
-        sessionId: payload.sessionId, requestId: payload.requestId
+        sessionId: payload.sessionId, requestId: payload.requestId,
+        reportType: payload.action === "relatorio_disc" ? "relatorio_disc" : "relatorio_360"
       }, 10000);
       if (receipt && receipt.ok && receipt.state === "ACCEPTED") return receipt;
       if (receipt && receipt.ok && receipt.state === "PENDING") continue;
@@ -6847,7 +6856,7 @@ async function gerarRelatorioGeral() {
     setTimeout(() => URL.revokeObjectURL(mergedUrl), 1500);
     let emailRequested = false;
     try {
-    await postResultToScript({
+    const reportPayload = {
       apiKey: API_KEY,
       action: "relatorio_disc",
       requestId: getOrCreateDisc360RequestId("relatorioDisc", (dadosPainel360.sessionId || dadosPainel360.email || "") + "_" + (dadosPainel360.pin || "")),
@@ -6859,15 +6868,20 @@ async function gerarRelatorioGeral() {
       sendEmail: true,
       notifyAdmin: true,
       nome: dadosPainel360.nome || "Avaliado"
-    });
-      emailRequested = true;
+    };
+      await postResultToScript(reportPayload);
+      const receipt = await aguardarReciboPdf360(reportPayload);
+      emailRequested = !!(receipt && receipt.ok && receipt.state === "ACCEPTED");
+      if (emailRequested) {
+        resetDisc360RequestId("relatorioDisc", (dadosPainel360.sessionId || dadosPainel360.email || "") + "_" + (dadosPainel360.pin || ""));
+      }
     } catch (sendError) {
       console.warn("Envio do relatório completo não confirmado:", sendError);
     }
     if (status) {
       status.textContent = emailRequested
-        ? "PDF completo gerado e download iniciado. O envio por e-mail foi solicitado, mas ainda não foi confirmado pelo servidor."
-        : "PDF completo gerado e download iniciado. Não foi possível solicitar o envio por e-mail.";
+        ? "PDF completo gerado. Envio aceito pelo servidor de e-mail; entrega ao destinatário não garantida."
+        : "PDF completo gerado e baixado. E-mail ainda não confirmado; não repita o envio com novo identificador.";
       status.className = "status status-pending";
     }
   } catch (err) {
