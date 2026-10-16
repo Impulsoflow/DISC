@@ -33,3 +33,16 @@ Executados a partir de clone novo da branch (ambiente Mac BCD, sem chamadas aos 
 - Revisão de segurança + backup, suíte de staging com dados sintéticos, comparação de versões, revisão de ciência/escala, confirmação do titular.
 - Só depois solicitar autorização explícita para merge/deploy, com rollback e janela de implantação.
 - **Não tocar no AVIVACEL.**
+
+## Atualização de segurança e publicação — 16/10/2026 (noite)
+
+- Corrigido também `relatorio_disc` (Relatório Geral): e-mail+PIN vinculados à sessão, PDF validado, idempotência por requestId e recibo autenticado. No frontend, ambos os relatórios verificam aceite do servidor sem alegar entrega na caixa de entrada.
+- Adicionado `disc360VerifySignedCentralGrant` em `saveDisc`: HMAC-SHA256 do grant emitido por `lib/research-access.ts`, confirmação de validade, finalidade `disc`, hash de e-mail, cliente e nonce; retake somente de `requestId` assinado. A configuração ausente do segredo causa falha fechada, não autorização por default.
+- Propriedade **necessária em staging e em produção após homologação:** `IMPULSO_DISC_ACCESS_HMAC_SECRET`. Nunca commitar o valor. Precisa corresponder à assinatura atual da Central — coordenação com operador do Worker. Não trocar o segredo de produção sem estratégia de compatibilidade e expiração dos grants emitidos.
+- **IMPORTANTE:** HMAC sozinho NÃO verifica estado `INICIADO` na D1 nem consome o nonce. A autorização/consumo **servidor-servidor** (issue #2) ainda é bloqueio P0 para venda e deploy. Não divulgar o token de grant em logs ou URLs.
+- Testes locais após integração: **46/46** (13 cálculo, 22 proteção/idempotência/PDF, 7 HMAC, 4 fluxo). Verificação de sintaxe do servidor e JS inline aprovada. GitHub Actions `Homologacao DISC 360` executado com conclusão success.
+- Confirmado diretamente no editor Google Apps Script autenticado como IMPULSOFLOW: projeto `Disc360`, implantação web ativa **versão 39 (27/08/2026)**. O editor identifica fonte v2.2. Essa versão não corresponde à branch e deve ser preservada; não substituir sem backup e comparação de fonte real.
+- Planilha `DISC360`: abas reais `Respostas`, `Avaliados360`, `Convidados360`, `Logs360`, `Solicitacoes DISC`; não foi observada `Operacoes360`. Nenhuma alteração nesses dados realizada.
+- Segurança ainda pendente: `createSession360` e `ativar_360` criam sessões sem comprovação robusta de direito; `relatorio_disc` novo requer integração do frontend em homologação. Revisar os demais endpoints abertos, incluindo recuperação de PIN/senha, mitigação de brute force e JSONP.
+- **Decisão técnica:** merge e deploy bloqueados até habilitar staging isolado, validar versão/escopos do Apps Script ativo, provar autorização e consumo em D1, testar E2E real com Gmail/Sheets de teste e aprovar rollback. Nenhum dado histórico foi recalculado.
+
