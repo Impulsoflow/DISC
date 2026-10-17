@@ -5637,29 +5637,17 @@ async function autoSendResult(scores, ranked) {
       throw new Error((saved && saved.error) || "A planilha não confirmou o salvamento do resultado.");
     }
 
-    // A cobrança/uso já foi registrado antes do questionário. A finalização na
-    // Central acontece pelo mesmo navegador (sem depender de permissão extra
-    // do Apps Script) e nunca desfaz um resultado já salvo.
-    let centralCompletionError = null;
-    try {
-      const completedAccess = await postCentralAccess({ action: "start", grant: discAccessGrant });
-      if (!completedAccess.started || completedAccess.phase !== "UTILIZADO") {
-        throw new Error((completedAccess && completedAccess.error) || "A Central não confirmou a finalização.");
-      }
-    } catch (completionError) {
-      centralCompletionError = completionError;
-      console.warn("Resultado DISC salvo; confirmação final da Central pendente:", completionError);
-    }
+    // O convite já foi gerado no mesmo salvamento e não cria sessão extra.
+    pinAtual360 = saved.pin || signupPin || null;
+    codigoAtual360 = saved.codigo360 || null;
 
+    // O servidor Apps Script validou e consumiu a autorização na Central
+    // antes de devolver sessionId. Não consumir novamente pelo navegador.
     autoSendDone = true;
+    resetDisc360RequestId("saveDisc", (payload.email || "") + "_" + (signupPin || _as.pin || ""));
     discAccessGrant = "";
     discRetakeAuthorized = false;
-    setAutoSendStatus(
-      centralCompletionError
-        ? "✅ Resultado salvo com segurança. A confirmação administrativa será conciliada automaticamente."
-        : "✅ Resultado confirmado na planilha. Processando o envio do PDF...",
-      "success"
-    );
+    setAutoSendStatus("✅ Resultado confirmado na planilha e na Central. Gerando o PDF...", "success");
     document.getElementById("final-success-message").style.display = "block";
 
     // O resultado já está confirmado. Somente agora geramos o PDF. Em celulares,
@@ -5668,9 +5656,10 @@ async function autoSendResult(scores, ranked) {
       setAutoSendStatus("✅ Resultado confirmado. Gerando o PDF para envio...", "success");
       const doc = await generatePDF(scores, ranked);
       const base64 = doc.output("datauristring").split(",")[1];
-      await postResultToScript({
+      const reportRequest = {
         apiKey: API_KEY,
         action: "relatorio_disc",
+        requestId: getOrCreateDisc360RequestId("relatorioDisc", saved.sessionId + "_" + (saved.pin || signupPin || "")),
         nome: payload.nome,
         email: payload.email,
         sessionId: saved.sessionId,
@@ -5679,8 +5668,15 @@ async function autoSendResult(scores, ranked) {
         pdfFileName: `ImpulsoDisc_${safeName}.pdf`,
         sendEmail: true,
         notifyAdmin: true
-      });
-      setAutoSendStatus("✅ Resultado salvo. PDF enviado para processamento.", "success");
+      };
+      await postResultToScript(reportRequest);
+      const pdfReceipt = await aguardarReciboPdf360(reportRequest);
+      if (pdfReceipt && pdfReceipt.ok && pdfReceipt.state === "ACCEPTED") {
+        setAutoSendStatus("✅ DISC salvo. Solicitação de e-mail aceita pelo servidor; entrega não garantida.", "success");
+        resetDisc360RequestId("relatorioDisc", saved.sessionId + "_" + (saved.pin || signupPin || ""));
+      } else {
+        setAutoSendStatus("✅ DISC salvo. PDF gerado, mas o envio por e-mail ainda não foi confirmado.", "pending");
+      }
     } catch (pdfError) {
       console.error("Resultado salvo, mas o envio do PDF falhou:", pdfError);
       setAutoSendStatus("✅ Resultado salvo na planilha. O PDF não foi enviado, mas sua pesquisa está segura.", "success");
@@ -5788,44 +5784,25 @@ function montarLinkConvite360(codigoOuPin) {
    Popula pinAtual360 e codigoAtual360. Retorna true em sucesso. */
 async function gerarLinkConvite360() {
   try {
-    // 🆕 USAR o PIN que o avaliado criou no cadastro (NÃO gerar novo)
-    const pin = signupPin;
-    const codigo = gerarCodigoDISC();
+    const pin = signupPin || pinAtual360;
+    const email = (document.getElementById("email").value || "").trim();
+    if (!email || !pin) throw new Error("Finalize a pesquisa DISC antes de ativar o 360°");
+    const session = await callAppsScriptJsonp("ativar_360", {
+      emailAvaliado: email, pin: pin
+    });
+    if (!session || !session.ok || !/^DISC-[A-Z0-9]{5}$/.test(session.codigo || "")) {
+      throw new Error((session && session.error) || "Convite 360° indisponível");
+    }
     pinAtual360 = pin;
-    codigoAtual360 = codigo;
-    avaliadoresAtuais360 = []; // sem lista — link aberto
-
-    const payload = {
-      apiKey: API_KEY,
-      action: "ativar_360",
-      testId: "disc_360",
-      modo: "link_aberto",      // 🆕 sinaliza ao backend: NÃO disparar emails individuais
-      nomeAvaliado: document.getElementById("name").value.trim(),
-      emailAvaliado: document.getElementById("email").value.trim(),
-      whatsappAvaliado: document.getElementById("whatsapp").value.trim(),
-      profissaoAvaliado: document.getElementById("occupation").value.trim(),
-      pin: pin,
-      codigo: codigo, // 🆕 backend usa este código se vier válido (DISC-XXXXX)
-      scoreD: scoresDisc360 ? scoresDisc360.D : 0,
-      scoreI: scoresDisc360 ? scoresDisc360.I : 0,
-      scoreS: scoresDisc360 ? scoresDisc360.S : 0,
-      scoreC: scoresDisc360 ? scoresDisc360.C : 0,
-      perfilPrimario: rankedDisc360 ? fullProfiles[rankedDisc360[0]].name : "",
-      perfilSecundario: rankedDisc360 ? fullProfiles[rankedDisc360[1]].name : "",
-      avaliadores: [],
-      dataAtivacao: new Date().toISOString()
-    };
-
-    await postResultToScript(payload);
+    codigoAtual360 = session.codigo;
+    avaliadoresAtuais360 = [];
     return true;
   } catch (e) {
-    console.error("Erro ao gerar link 360°:", e);
+    console.warn("Não foi possível recuperar o convite 360:", e);
     const status = document.getElementById("ativar-360-status");
     if (status) {
-      status.textContent = "❌ Erro ao gerar link. Tente novamente em instantes.";
+      status.textContent = "Conclua sua pesquisa DISC e use o PIN registrado para compartilhar o convite.";
       status.className = "status status-error";
-    } else {
-      alert("Erro ao gerar link. Tente novamente.");
     }
     pinAtual360 = null;
     codigoAtual360 = null;
@@ -6722,6 +6699,28 @@ function resetDisc360RequestId(scope, seed) {
   try { localStorage.removeItem("disc360_request_" + safeScope + "_" + safeSeed); } catch (e) {}
 }
 
+// O formulário oculto não fornece confirmação verificável.
+// Consulta recibo no servidor sem tratar entrega ao Gmail como entrega ao destinatário.
+async function aguardarReciboPdf360(payload) {
+  for (let attempt = 0; attempt < 7; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    try {
+      const receipt = await callAppsScriptJsonp("getOperation360Status", {
+        email: payload.email, pin: payload.pin,
+        sessionId: payload.sessionId, requestId: payload.requestId,
+        reportType: payload.action === "relatorio_disc" ? "relatorio_disc" : "relatorio_360"
+      }, 10000);
+      if (receipt && receipt.ok && receipt.state === "ACCEPTED") return receipt;
+      if (receipt && receipt.ok && receipt.state === "PENDING") continue;
+      if (receipt && receipt.ok && receipt.state === "NOT_FOUND") continue;
+      if (receipt && receipt.ok === false) return receipt;
+    } catch (error) {
+      console.warn("Consulta de recibo 360 temporariamente indisponível");
+    }
+  }
+  return null;
+}
+
 /* ---------- Relatório 360° (PDF) ---------- */
 async function gerarRelatorio360() {
   if (!dadosPainel360) return;
@@ -6757,12 +6756,21 @@ async function gerarRelatorio360() {
     doc.save(`Relatorio360_${safeName}.pdf`);
     try {
       await postResultToScript(payload);
-      status.textContent = "PDF gerado e download iniciado. O envio por e-mail foi solicitado, mas ainda não foi confirmado pelo servidor.";
+      status.textContent = "PDF gerado. Verificando o recibo de processamento do servidor...";
+      const receipt = await aguardarReciboPdf360(payload);
+      if (receipt && receipt.ok && receipt.state === "ACCEPTED") {
+        status.textContent = "PDF gerado e solicitação aceita pelo Gmail. A entrega à caixa de entrada ainda depende do provedor de e-mail.";
+        status.className = "status status-success";
+        resetDisc360RequestId("relatorio360", (dadosPainel360.sessionId || dadosPainel360.email || "") + "_" + (dadosPainel360.pin || ""));
+      } else {
+        status.textContent = "PDF disponível para download. O envio por e-mail não foi confirmado: verifique o painel ou solicite conferência antes de repetir.";
+        status.className = "status status-pending";
+      }
     } catch (sendError) {
       console.warn("Envio do relatório não confirmado:", sendError);
-      status.textContent = "PDF gerado e download iniciado. Não foi possível solicitar o envio por e-mail.";
+      status.textContent = "PDF disponível para download, mas não foi possível confirmar o envio por e-mail.";
+      status.className = "status status-pending";
     }
-    status.className = "status status-pending";
     btn.disabled = false;
     btn.innerHTML = "📄 Gerar Relatório Comparativo (PDF)";
 
@@ -6817,7 +6825,7 @@ async function gerarRelatorioGeral() {
     setTimeout(() => URL.revokeObjectURL(mergedUrl), 1500);
     let emailRequested = false;
     try {
-    await postResultToScript({
+    const reportPayload = {
       apiKey: API_KEY,
       action: "relatorio_disc",
       requestId: getOrCreateDisc360RequestId("relatorioDisc", (dadosPainel360.sessionId || dadosPainel360.email || "") + "_" + (dadosPainel360.pin || "")),
@@ -6829,15 +6837,20 @@ async function gerarRelatorioGeral() {
       sendEmail: true,
       notifyAdmin: true,
       nome: dadosPainel360.nome || "Avaliado"
-    });
-      emailRequested = true;
+    };
+      await postResultToScript(reportPayload);
+      const receipt = await aguardarReciboPdf360(reportPayload);
+      emailRequested = !!(receipt && receipt.ok && receipt.state === "ACCEPTED");
+      if (emailRequested) {
+        resetDisc360RequestId("relatorioDisc", (dadosPainel360.sessionId || dadosPainel360.email || "") + "_" + (dadosPainel360.pin || ""));
+      }
     } catch (sendError) {
       console.warn("Envio do relatório completo não confirmado:", sendError);
     }
     if (status) {
       status.textContent = emailRequested
-        ? "PDF completo gerado e download iniciado. O envio por e-mail foi solicitado, mas ainda não foi confirmado pelo servidor."
-        : "PDF completo gerado e download iniciado. Não foi possível solicitar o envio por e-mail.";
+        ? "PDF completo gerado. Envio aceito pelo servidor de e-mail; entrega ao destinatário não garantida."
+        : "PDF completo gerado e baixado. E-mail ainda não confirmado; não repita o envio com novo identificador.";
       status.className = "status status-pending";
     }
   } catch (err) {
