@@ -5637,6 +5637,10 @@ async function autoSendResult(scores, ranked) {
       throw new Error((saved && saved.error) || "A planilha não confirmou o salvamento do resultado.");
     }
 
+    // O convite já foi gerado no mesmo salvamento e não cria sessão extra.
+    pinAtual360 = saved.pin || signupPin || null;
+    codigoAtual360 = saved.codigo360 || null;
+
     // O servidor Apps Script validou e consumiu a autorização na Central
     // antes de devolver sessionId. Não consumir novamente pelo navegador.
     autoSendDone = true;
@@ -5780,44 +5784,25 @@ function montarLinkConvite360(codigoOuPin) {
    Popula pinAtual360 e codigoAtual360. Retorna true em sucesso. */
 async function gerarLinkConvite360() {
   try {
-    // 🆕 USAR o PIN que o avaliado criou no cadastro (NÃO gerar novo)
-    const pin = signupPin;
-    const codigo = gerarCodigoDISC();
+    const pin = signupPin || pinAtual360;
+    const email = (document.getElementById("email").value || "").trim();
+    if (!email || !pin) throw new Error("Finalize a pesquisa DISC antes de ativar o 360°");
+    const session = await callAppsScriptJsonp("ativar_360", {
+      emailAvaliado: email, pin: pin
+    });
+    if (!session || !session.ok || !/^DISC-[A-Z0-9]{5}$/.test(session.codigo || "")) {
+      throw new Error((session && session.error) || "Convite 360° indisponível");
+    }
     pinAtual360 = pin;
-    codigoAtual360 = codigo;
-    avaliadoresAtuais360 = []; // sem lista — link aberto
-
-    const payload = {
-      apiKey: API_KEY,
-      action: "ativar_360",
-      testId: "disc_360",
-      modo: "link_aberto",      // 🆕 sinaliza ao backend: NÃO disparar emails individuais
-      nomeAvaliado: document.getElementById("name").value.trim(),
-      emailAvaliado: document.getElementById("email").value.trim(),
-      whatsappAvaliado: document.getElementById("whatsapp").value.trim(),
-      profissaoAvaliado: document.getElementById("occupation").value.trim(),
-      pin: pin,
-      codigo: codigo, // 🆕 backend usa este código se vier válido (DISC-XXXXX)
-      scoreD: scoresDisc360 ? scoresDisc360.D : 0,
-      scoreI: scoresDisc360 ? scoresDisc360.I : 0,
-      scoreS: scoresDisc360 ? scoresDisc360.S : 0,
-      scoreC: scoresDisc360 ? scoresDisc360.C : 0,
-      perfilPrimario: rankedDisc360 ? fullProfiles[rankedDisc360[0]].name : "",
-      perfilSecundario: rankedDisc360 ? fullProfiles[rankedDisc360[1]].name : "",
-      avaliadores: [],
-      dataAtivacao: new Date().toISOString()
-    };
-
-    await postResultToScript(payload);
+    codigoAtual360 = session.codigo;
+    avaliadoresAtuais360 = [];
     return true;
   } catch (e) {
-    console.error("Erro ao gerar link 360°:", e);
+    console.warn("Não foi possível recuperar o convite 360:", e);
     const status = document.getElementById("ativar-360-status");
     if (status) {
-      status.textContent = "❌ Erro ao gerar link. Tente novamente em instantes.";
+      status.textContent = "Conclua sua pesquisa DISC e use o PIN registrado para compartilhar o convite.";
       status.className = "status status-error";
-    } else {
-      alert("Erro ao gerar link. Tente novamente.");
     }
     pinAtual360 = null;
     codigoAtual360 = null;
