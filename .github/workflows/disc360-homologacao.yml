@@ -39,6 +39,7 @@ jobs:
           node tests/disc360-backend-guards.test.cjs
           node tests/disc360-central-grant.test.cjs
           node tests/disc360-invite-access.test.cjs
+          node tests/disc360-log-privacy.test.cjs
           node --test tests/access-flow.test.mjs
       - name: Lembrete de gate antes do deploy
         run: |
