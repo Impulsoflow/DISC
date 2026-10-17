@@ -33,7 +33,9 @@ const c=claim();c.requestId=123;
 assert.equal(env.disc360VerifySignedCentralGrant({email,centralAccessGrant:sign(c),centralRetakeAuthorized:false}).retakeAuthorized,true);
 });
 check('reject modified signature',()=>{
-const t=sign(claim());assert.throws(()=>env.disc360VerifySignedCentralGrant({email,centralAccessGrant:t.slice(0,-1)+'A'}));
+const [payload, sig] = sign(claim()).split('.');
+const tampered = payload + '.' + (sig[0] === 'A' ? 'B' : 'A') + sig.slice(1);
+assert.throws(()=>env.disc360VerifySignedCentralGrant({email,centralAccessGrant:tampered}));
 });
 check('reject expired grant',()=>{
 const c=claim();c.exp=Date.now()-1000;assert.throws(()=>env.disc360VerifySignedCentralGrant({email,centralAccessGrant:sign(c)}));
