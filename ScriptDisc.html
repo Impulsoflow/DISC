@@ -649,7 +649,7 @@ function create360Session(data) {
   ]);
 
   logEvent("SESSION_360_CREATED",
-    `${data.nome} | ${data.sessionId} | PIN=${data.pin} | Codigo=${codigo360}`);
+    `session=${data.sessionId} | convite_criado=true`);
 
   return { codigo360: codigo360 };
 }
