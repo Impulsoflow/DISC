@@ -2225,7 +2225,7 @@ function handleAtivar360(payload) {
     if (!payload || typeof payload !== "object") throw new Error("Solicitação inválida");
     const email = String(payload.emailAvaliado || "").trim().toLowerCase();
     const pin = String(payload.pin || "").trim();
-    if (!email || !/^\\d{6}$/.test(pin)) throw new Error("Dados do titular inválidos");
+    if (!email || !/^\d{6}$/.test(pin)) throw new Error("Dados do titular inválidos");
     const session = findSessionByEmailAndPin(email, pin);
     if (!session || String(session.status) !== "ativo") {
       throw new Error("A avaliação DISC precisa estar concluída e ativa");
