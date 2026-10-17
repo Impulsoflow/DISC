@@ -24,7 +24,9 @@ test("requires server-verified signed Central grant and prevents forged retakes"
   assert.match(script, /computeHmacSha256Signature/);
   assert.doesNotMatch(script, /retakeAuthorized: payload\.centralRetakeAuthorized === true/);
   assert.match(page, /action: "start", grant: discAccessGrant/);
-  assert.match(page, /completedAccess\.phase !== "UTILIZADO"/);
+  assert.match(script, /disc360CentralServerRequest\("validate", payload\)/);
+  assert.match(script, /disc360CentralServerRequest\("complete", payload\)/);
+  assert.doesNotMatch(page, /const completedAccess = await postCentralAccess/);
 });
 
 
