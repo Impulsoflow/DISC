@@ -596,33 +596,8 @@ function normalizeDiscWhatsapp(value) {
 // 2️⃣ CRIAR SESSÃO 360°
 // ═══════════════════════════════════════════════════════════════════════
 function handleCreateSession360(payload) {
-  try {
-    const sessionId = generateSessionId();
-    const pin = generatePin();
-
-    create360Session({
-      sessionId, pin,
-      nome: payload.nome,
-      email: payload.email,
-      whatsapp: payload.whatsapp || "",
-      scoreD: payload.scoreD || 0, scoreI: payload.scoreI || 0,
-      scoreS: payload.scoreS || 0, scoreC: payload.scoreC || 0,
-      perfilPrimario: payload.perfilPrimario || "",
-      exigenciaD: Number(payload.exigenciaD) || 0,
-      exigenciaI: Number(payload.exigenciaI) || 0,
-      exigenciaS: Number(payload.exigenciaS) || 0,
-      exigenciaC: Number(payload.exigenciaC) || 0
-    });
-
-    return jsonResponse({
-      ok: true,
-      sessionId, pin,
-      linkConvidado: `${URL_PAGINA_CONVIDADO}?id=${sessionId}`,
-      linkPainel: URL_PAINEL_AVALIADO
-    });
-  } catch (err) {
-    return jsonResponse({ ok: false, error: err.message });
-  }
+  // Rota legada pública desativada: somente saveDisc pode criar sessões.
+  return jsonResponse({ok:false,error:"Criação direta de sessão desativada; finalize a pesquisa DISC."});
 }
 
 function create360Session(data) {
@@ -2242,67 +2217,32 @@ function logEvent(type, message) {
 // ═══════════════════════════════════════════════════════════════════════
 // 7.5️⃣ ATIVAR 360° (compartilhamento por LINK ABERTO + WhatsApp)
 // ═══════════════════════════════════════════════════════════════════════
+// O bônus 360° é vinculado a uma sessão pré-existente de saveDisc.
+// Nunca cria nova sessão nem altera scores com parâmetros públicos.
 function handleAtivar360(payload) {
   try {
-    const nome = String(payload.nomeAvaliado || "").trim();
+    if (!payload || typeof payload !== "object") throw new Error("Solicitação inválida");
     const email = String(payload.emailAvaliado || "").trim().toLowerCase();
     const pin = String(payload.pin || "").trim();
-
-    if (!nome || !email || !pin) {
-      return jsonResponse({ ok: false, error: "Dados obrigatórios ausentes (nome/email/pin)" });
+    if (!email || !/^\\d{6}$/.test(pin)) throw new Error("Dados do titular inválidos");
+    const session = findSessionByEmailAndPin(email, pin);
+    if (!session || String(session.status) !== "ativo") {
+      throw new Error("A avaliação DISC precisa estar concluída e ativa");
     }
-
-    const sessionId = generateSessionId();
-    // 🆕 Gera o código 360° único (DISC-XXXXX); aceita o que o frontend enviou se válido
-    const codigoEnviado = String(payload.codigo || "").trim().toUpperCase();
-    const codigo360 = /^DISC-[A-Z0-9]{5}$/.test(codigoEnviado) ? codigoEnviado : generateCodigo360();
-
-    create360Session({
-      sessionId: sessionId,
-      pin: pin,
-      codigo360: codigo360,
-      nome: nome,
-      email: email,
-      whatsapp: payload.whatsappAvaliado || "",
-      scoreD: Number(payload.scoreD) || 0,
-      scoreI: Number(payload.scoreI) || 0,
-      scoreS: Number(payload.scoreS) || 0,
-      scoreC: Number(payload.scoreC) || 0,
-      perfilPrimario: payload.perfilPrimario || "",
-      exigenciaD: Number(payload.exigenciaD) || 0,
-      exigenciaI: Number(payload.exigenciaI) || 0,
-      exigenciaS: Number(payload.exigenciaS) || 0,
-      exigenciaC: Number(payload.exigenciaC) || 0
-    });
-
-    const modo = String(payload.modo || "").trim();
-    try {
-      sendAtivacao360Email(email, nome, pin, sessionId, codigo360);
-    } catch (e) {
-      logEvent("EMAIL_ERROR", "ativar_360 confirm: " + e.message);
+    if (payload.sessionId && String(payload.sessionId) !== String(session.sessionId)) {
+      throw new Error("Sessão divergente");
     }
-
-    try {
-      sendAdminEmail(
-        `[Impulso] 360° ativado: ${nome}`,
-        `Avaliado: ${nome}\nEmail: ${email}\nPIN: ${pin}\nCódigo: ${codigo360}\nSession: ${sessionId}\nModo: ${modo || "padrão"}`);
-    } catch (e) { /* silencioso */ }
-
-    logEvent("ATIVAR_360_OK",
-      `${nome} | ${email} | ${sessionId} | codigo=${codigo360} | modo=${modo || "padrão"}`);
-
+    if (!session.codigo360 || !/^DISC-[A-Z0-9]{5}$/.test(String(session.codigo360))) {
+      throw new Error("Código do convite indisponível, solicite suporte");
+    }
     return jsonResponse({
-      ok: true,
-      sessionId: sessionId,
-      pin: pin,
-      codigo: codigo360,
-      // 🆕 Link agora usa o código DISC-XXXXX como identificador público
-      linkConvidado: `${URL_PAGINA_CONVIDADO}?codigo=${codigo360}`,
-      modo: modo || "padrão"
+      ok: true, sessionId: session.sessionId, pin: pin,
+      codigo: session.codigo360,
+      linkConvidado: URL_PAGINA_CONVIDADO + "?codigo=" + session.codigo360,
+      modo: "sessao_existente"
     });
-  } catch (err) {
-    logEvent("ERROR", "ativar_360: " + err.message);
-    return jsonResponse({ ok: false, error: err.message });
+  } catch (error) {
+    return jsonResponse({ok:false,error:error.message});
   }
 }
 
