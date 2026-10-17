@@ -134,6 +134,7 @@ function doGet(e) {
     switch (action) {
       case "saveDisc":         resultText = handleSaveDisc(payload).getContent(); break;
       case "consultar_360":     resultText = handleConsultar360(payload).getContent(); break;
+      case "ativar_360":       resultText = handleAtivar360(payload).getContent(); break;
       case "recuperar_pin_360": resultText = handleRecuperarPin360(payload).getContent(); break;
       case "loginAvaliado":     resultText = handleLoginAvaliado(payload).getContent(); break;
       case "getStatus360":      resultText = handleGetStatus360(payload).getContent(); break;
