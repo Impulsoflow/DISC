@@ -54,6 +54,7 @@ function doPost(e) {
       case "getStatus360":      return handleGetStatus360(payload);
       case "getReport360":      return handleGetReport360(payload);
       case "relatorio_360":     return handleRelatorio360(payload);
+      case "getOperation360Status": return handleGetOperation360Status(payload);
       case "relatorio_disc":    return handleRelatorioDisc(payload);
       case "validateInvite":    return handleValidateInvite(payload);
       case "consultar_360":     return handleConsultar360(payload);
@@ -133,11 +134,13 @@ function doGet(e) {
     switch (action) {
       case "saveDisc":         resultText = handleSaveDisc(payload).getContent(); break;
       case "consultar_360":     resultText = handleConsultar360(payload).getContent(); break;
+      case "ativar_360":       resultText = handleAtivar360(payload).getContent(); break;
       case "recuperar_pin_360": resultText = handleRecuperarPin360(payload).getContent(); break;
       case "loginAvaliado":     resultText = handleLoginAvaliado(payload).getContent(); break;
       case "getStatus360":      resultText = handleGetStatus360(payload).getContent(); break;
       case "getReport360":      resultText = handleGetReport360(payload).getContent(); break;
       case "relatorio_360":     resultText = handleRelatorio360(payload).getContent(); break;
+      case "getOperation360Status": resultText = handleGetOperation360Status(payload).getContent(); break;
       case "relatorio_disc":    resultText = handleRelatorioDisc(payload).getContent(); break;
       case "validateInvite":    resultText = handleValidateInvite(payload).getContent(); break;
       case "submitConvidado":   resultText = handleSubmitConvidado(payload).getContent(); break;
@@ -184,6 +187,7 @@ function isPublicActionAllowed(action) {
     "getStatus360",
     "getReport360",
     "relatorio_360",
+    "getOperation360Status",
     "relatorio_disc",
     "validateInvite",
     "consultar_360",
@@ -209,27 +213,153 @@ function sendAdminEmail(subject, body, options) {
 // ═══════════════════════════════════════════════════════════════════════
 // 1️⃣ DISC ORIGINAL — SALVAMENTO + EMAIL
 // ═══════════════════════════════════════════════════════════════════════
+// Contrato assinado pela Central Impulso (lib/research-access.ts).
+// Exige segredo configurado apenas em Script Properties do ambiente correto.
+// Não confirma, por si só, que o nonce foi consumido na D1: isso exige etapa
+// complementar servidor-servidor antes da publicação comercial.
+function disc360VerifySignedCentralGrant(payload) {
+  if (!payload || typeof payload !== "object") throw new Error("Solicitação inválida");
+  const grant = String(payload.centralAccessGrant || "").trim();
+  const parts = grant.split(".");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new Error("Autorização da Central inválida ou ausente");
+  }
+  const secret = PropertiesService.getScriptProperties().getProperty("IMPULSO_DISC_ACCESS_HMAC_SECRET");
+  if (!secret || secret.length < 32) {
+    throw new Error("Assinatura da Central não configurada no servidor");
+  }
+  const computed = Utilities.base64EncodeWebSafe(
+    Utilities.computeHmacSha256Signature(parts[0], secret, Utilities.Charset.UTF_8)
+  ).replace(/=+$/, "");
+  // Comparação por conteúdo sem saída prematura dependente do caractere.
+  if (computed.length !== parts[1].length) throw new Error("Assinatura inválida");
+  let mismatch = 0;
+  for (let i = 0; i < computed.length; i++) {
+    mismatch |= computed.charCodeAt(i) ^ parts[1].charCodeAt(i);
+  }
+  if (mismatch !== 0) throw new Error("Assinatura inválida");
+  const bytes = Utilities.base64DecodeWebSafe(parts[0]);
+  const claim = JSON.parse(Utilities.newBlob(bytes).getDataAsString("UTF-8"));
+  if (claim.researchId !== "disc" ||
+      typeof claim.nonce !== "string" || claim.nonce.length < 20 ||
+      typeof claim.clientId !== "string" || claim.clientId.length < 4 ||
+      !Number.isFinite(Number(claim.exp)) || Date.now() >= Number(claim.exp)) {
+    throw new Error("Autorização inválida, expirada ou destinada a outra pesquisa");
+  }
+  const email = String(payload.email || "").trim().toLowerCase();
+  const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, email, Utilities.Charset.UTF_8);
+  const emailHash = digest.map(function(b) {
+    return ("0" + (b < 0 ? b + 256 : b).toString(16)).slice(-2);
+  }).join("");
+  if (!email || emailHash !== claim.emailHash) {
+    throw new Error("Autorização não pertence ao participante");
+  }
+  return {allowed: true, retakeAuthorized: claim.requestId !== null && claim.requestId !== undefined,
+    accessNonce: claim.nonce, clientId: claim.clientId};
+}
+
+// Receptor DISC: confirma a autorização na D1 ANTES do salvamento e a
+// consome DEPOIS da escrita confirmada. Valores confidenciais só em ScriptProperties.
+function disc360CentralServerRequest(action, payload) {
+  if (action !== "validate" && action !== "complete") throw new Error("Ação de autorização desconhecida");
+  const props = PropertiesService.getScriptProperties();
+  const url = String(props.getProperty("IMPULSO_DISC_INTERNAL_URL") || "");
+  const secret = String(props.getProperty("IMPULSO_DISC_SCRIPT_SHARED_SECRET") || "");
+  if (!/^https:\/\/[^\s/?#]+\/api\/internal\/disc-access$/.test(url) || secret.length < 32) {
+    throw new Error("Integração DISC com a Central não configurada no servidor");
+  }
+  const response = UrlFetchApp.fetch(url, {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify({
+      action: action,
+      grant: payload.centralAccessGrant,
+      submissionId: payload.requestId,
+      email: String(payload.email || "").trim().toLowerCase()
+    }),
+    headers: {Authorization: "Bearer " + secret},
+    muteHttpExceptions: true
+  });
+  const status = response.getResponseCode();
+  let receipt = null;
+  try { receipt = JSON.parse(response.getContentText()); } catch (e) {}
+  if (status !== 200 || !receipt || receipt.ok !== true ||
+      (action === "validate" && receipt.phase !== "INICIADO") ||
+      (action === "complete" && receipt.phase !== "UTILIZADO")) {
+    throw new Error("Central não confirmou " + action + " da autorização DISC (HTTP " + status + ")");
+  }
+  return receipt;
+}
+
+function disc360OnceSelfDisc(payload, operation) {
+  if (!payload || typeof payload !== "object" ||
+      typeof payload.requestId !== "string" ||
+      !/^[a-zA-Z0-9_-]{20,100}$/.test(payload.requestId)) {
+    throw new Error("requestId obrigatório no salvamento DISC");
+  }
+  const grant = disc360VerifySignedCentralGrant(payload);
+  const fingerprint = disc360GuestFingerprint(payload);
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(15000)) throw new Error("Servidor ocupado; tente novamente com o mesmo requestId");
+  try {
+    const spreadsheet = getSpreadsheet();
+    let ledger = spreadsheet.getSheetByName("Operacoes360");
+    if (!ledger) {
+      ledger = spreadsheet.insertSheet("Operacoes360");
+      ledger.appendRow(["RequestId", "Action", "Fingerprint", "Status", "Response", "Timestamp", "GrantNonce"]);
+    }
+    const values = ledger.getDataRange().getValues();
+    for (let i = 1; i < values.length; i++) {
+      if (String(values[i][0]) === payload.requestId) {
+        if (values[i][1] !== "saveDisc" || values[i][2] !== fingerprint ||
+            values[i][6] !== grant.accessNonce) {
+          throw new Error("requestId reutilizado com outro resultado");
+        }
+        if (values[i][3] === "COMPLETE") {
+          return jsonResponse(Object.assign({}, JSON.parse(values[i][4]), {duplicate: true}));
+        }
+        throw new Error("Salvamento anterior pendente de conciliação; não gere um novo requestId");
+      }
+      if (values[i][1] === "saveDisc" && String(values[i][6]) === grant.accessNonce) {
+        throw new Error("Autorização DISC já vinculada a outra tentativa");
+      }
+    }
+    disc360CentralServerRequest("validate", payload);
+    ledger.appendRow([payload.requestId, "saveDisc", fingerprint, "PENDING", "", new Date(), grant.accessNonce]);
+    SpreadsheetApp.flush();
+    const row = ledger.getLastRow();
+    const result = operation(payload);
+    const parsed = JSON.parse(result.getContent());
+    if (!parsed.ok || !parsed.sessionId) {
+      throw new Error("Salvamento não confirmado; tentativa pendente de conciliação");
+    }
+    // A gravação já ocorreu. Se o consumo na Central falhar, não repetir:
+    // PENDING requer conciliação administrativa, nunca reexecutar o salvamento.
+    disc360CentralServerRequest("complete", payload);
+    ledger.getRange(row, 4, 1, 2).setValues([["COMPLETE", JSON.stringify(parsed)]]);
+    SpreadsheetApp.flush();
+    return result;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function handleSaveDisc(payload) {
+  try {
+    return disc360OnceSelfDisc(payload, handleSaveDiscOriginal);
+  } catch (err) {
+    return jsonResponse({ok:false, error:err.message});
+  }
+}
+
+function handleSaveDiscOriginal(payload) {
   try {
     const ss = getSpreadsheet();
     let sheet = ss.getSheetByName(ABA_DISC);
 
-    const centralGrant = String(payload.centralAccessGrant || "").trim();
-    if (!centralGrant) {
-      return jsonResponse({
-        ok: false,
-        retakeRequired: true,
-        error: "Autorização ausente ou expirada. Reinicie a pesquisa pela tela inicial."
-      });
-    }
-
-    // A Central já registrou o início antes do questionário. Nesta etapa o
-    // Apps Script apenas persiste o resultado: ele não depende de uma chamada
-    // externa para não travar um cliente que já concluiu a pesquisa.
-    const access = {
-      allowed: true,
-      retakeAuthorized: payload.centralRetakeAuthorized === true
-    };
+    // Validação real do HMAC da Central Impulso, nunca confiar no navegador.
+    // Sem propriedade segura de implantação, falhar fechado.
+    const access = disc360VerifySignedCentralGrant(payload);
 
     const legacyAccess = getDiscRetakeEligibility(payload);
     if (legacyAccess.hasPreviousResult && !access.retakeAuthorized && !legacyAccess.allowed) {
@@ -467,33 +597,8 @@ function normalizeDiscWhatsapp(value) {
 // 2️⃣ CRIAR SESSÃO 360°
 // ═══════════════════════════════════════════════════════════════════════
 function handleCreateSession360(payload) {
-  try {
-    const sessionId = generateSessionId();
-    const pin = generatePin();
-
-    create360Session({
-      sessionId, pin,
-      nome: payload.nome,
-      email: payload.email,
-      whatsapp: payload.whatsapp || "",
-      scoreD: payload.scoreD || 0, scoreI: payload.scoreI || 0,
-      scoreS: payload.scoreS || 0, scoreC: payload.scoreC || 0,
-      perfilPrimario: payload.perfilPrimario || "",
-      exigenciaD: Number(payload.exigenciaD) || 0,
-      exigenciaI: Number(payload.exigenciaI) || 0,
-      exigenciaS: Number(payload.exigenciaS) || 0,
-      exigenciaC: Number(payload.exigenciaC) || 0
-    });
-
-    return jsonResponse({
-      ok: true,
-      sessionId, pin,
-      linkConvidado: `${URL_PAGINA_CONVIDADO}?id=${sessionId}`,
-      linkPainel: URL_PAINEL_AVALIADO
-    });
-  } catch (err) {
-    return jsonResponse({ ok: false, error: err.message });
-  }
+  // Rota legada pública desativada: somente saveDisc pode criar sessões.
+  return jsonResponse({ok:false,error:"Criação direta de sessão desativada; finalize a pesquisa DISC."});
 }
 
 function create360Session(data) {
@@ -544,7 +649,7 @@ function create360Session(data) {
   ]);
 
   logEvent("SESSION_360_CREATED",
-    `${data.nome} | ${data.sessionId} | PIN=${data.pin} | Codigo=${codigo360}`);
+    `session=${data.sessionId} | convite_criado=true`);
 
   return { codigo360: codigo360 };
 }
@@ -697,7 +802,98 @@ function handleValidateInvite(payload) {
 // ═══════════════════════════════════════════════════════════════════════
 // 4️⃣ CONVIDADO ENVIA RESPOSTA  🆕 CORRIGIDO — aceita sessionId OU pin
 // ═══════════════════════════════════════════════════════════════════════
+
+// DISC 360° — segurança de escrita e idempotência de convidados (candidato de homologação).
+// O requestId precisa persistir no cliente ao repetir a mesma tentativa.
+function disc360GuestAssert(ok, message) {
+  if (!ok) throw new Error(message);
+}
+function disc360ValidateGuestSubmission(payload) {
+  disc360GuestAssert(payload && typeof payload === "object", "Payload de convidado inválido");
+  disc360GuestAssert(typeof payload.requestId === "string" &&
+    /^[a-zA-Z0-9_-]{20,100}$/.test(payload.requestId), "requestId inválido");
+  disc360GuestAssert(Array.isArray(payload.respostas) && payload.respostas.length === 24 &&
+    payload.respostas.every(n => Number.isInteger(n) && n >= 1 && n <= 5),
+    "As 24 respostas DISC devem ser inteiros entre 1 e 5");
+  disc360GuestAssert(Array.isArray(payload.premium) && payload.premium.length === 12 &&
+    payload.premium.every(n => Number.isInteger(n) && n >= 1 && n <= 5),
+    "As 12 respostas de liderança devem ser inteiros entre 1 e 5");
+  disc360GuestAssert(typeof payload.relacao === "string" && payload.relacao.trim().length > 0,
+    "Relação obrigatória");
+  disc360GuestAssert(typeof payload.tempoConvivencia === "string" && payload.tempoConvivencia.trim().length > 0,
+    "Tempo de convivência obrigatório");
+  let session = payload.codigo ? findSessionByCodigo(payload.codigo) : null;
+  if (!session && payload.sessionId) session = findSession(payload.sessionId);
+  if (!session && payload.pin) session = findSessionByPin(payload.pin);
+  disc360GuestAssert(session && session.status === "ativo", "Sessão inválida ou encerrada");
+  if (payload.sessionId) {
+    disc360GuestAssert(String(payload.sessionId) === String(session.sessionId),
+      "Identificadores de sessão divergentes");
+  }
+  if (session.dataLimite) {
+    const expiry = new Date(session.dataLimite).getTime();
+    disc360GuestAssert(Number.isFinite(expiry) && expiry >= Date.now(), "Convite expirado");
+  }
+  return session;
+}
+function disc360GuestFingerprint(payload) {
+  const normalized = {};
+  Object.keys(payload).sort().forEach(key => {
+    if (key !== "apiKey" && key !== "requestId" && key !== "discScoringMap") {
+      normalized[key] = payload[key];
+    }
+  });
+  const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
+    JSON.stringify(normalized), Utilities.Charset.UTF_8);
+  return Utilities.base64EncodeWebSafe(digest);
+}
+function disc360OnceGuest(payload, operation) {
+  // Verifica tudo antes de criar marcador PENDING ou qualquer linha de resposta.
+  disc360ValidateGuestSubmission(payload);
+  const fingerprint = disc360GuestFingerprint(payload);
+  const lock = LockService.getScriptLock();
+  disc360GuestAssert(lock.tryLock(10000), "Servidor ocupado. Reenvie com o mesmo requestId");
+  try {
+    const ss = getSpreadsheet();
+    let ledger = ss.getSheetByName("Operacoes360");
+    if (!ledger) {
+      ledger = ss.insertSheet("Operacoes360");
+      ledger.appendRow(["RequestId", "Action", "Fingerprint", "Status", "Response", "Timestamp"]);
+    }
+    const entries = ledger.getDataRange().getValues();
+    for (let i = 1; i < entries.length; i++) {
+      if (String(entries[i][0]) !== payload.requestId) continue;
+      disc360GuestAssert(entries[i][1] === "submitConvidado" && entries[i][2] === fingerprint,
+        "requestId já utilizado para outra operação ou conteúdo");
+      if (entries[i][3] === "COMPLETE") {
+        const prev = JSON.parse(entries[i][4]);
+        return jsonResponse(Object.assign({}, prev, {duplicate: true}));
+      }
+      throw new Error("Tentativa pendente de conciliação administrativa; não altere o requestId.");
+    }
+    ledger.appendRow([payload.requestId, "submitConvidado", fingerprint, "PENDING", "", new Date()]);
+    SpreadsheetApp.flush();
+    const ledgerRow = ledger.getLastRow();
+    const response = operation(payload);
+    const result = JSON.parse(response.getContent());
+    if (result.ok === true) {
+      ledger.getRange(ledgerRow, 4, 1, 2).setValues([["COMPLETE", JSON.stringify(result)]]);
+      SpreadsheetApp.flush();
+    }
+    return response;
+  } finally {
+    lock.releaseLock();
+  }
+}
 function handleSubmitConvidado(payload) {
+  try {
+    return disc360OnceGuest(payload, handleSubmitConvidadoOriginal);
+  } catch (error) {
+    return jsonResponse({ok: false, error: error.message});
+  }
+}
+
+function handleSubmitConvidadoOriginal(payload) {
   try {
     // 🆕 Prioriza CÓDIGO 360° (DISC-XXXXX); cai para sessionId; cai para PIN
     let session = null;
@@ -823,9 +1019,24 @@ function handleLoginAvaliado(payload) {
 // ═══════════════════════════════════════════════════════════════════════
 // 6️⃣ STATUS DA AVALIAÇÃO
 // ═══════════════════════════════════════════════════════════════════════
+
+// A chave incorporada ao HTML público NÃO autentica o titular.
+// Para ler resultados, conferir sempre e-mail+PIN e vincular à sessão solicitada.
+function disc360RequireOwner(payload, requiredSessionId) {
+  disc360GuestAssert(payload && typeof payload === "object", "Credenciais ausentes");
+  const email = String(payload.email || "").trim().toLowerCase();
+  const pin = String(payload.pin || "").trim();
+  disc360GuestAssert(email && pin, "E-mail e PIN obrigatórios");
+  const owner = findSessionByEmailAndPin(email, pin);
+  disc360GuestAssert(owner, "E-mail ou PIN inválidos");
+  disc360GuestAssert(requiredSessionId && String(owner.sessionId) === String(requiredSessionId),
+    "Acesso negado: sessão não pertence ao titular");
+  return owner;
+}
+
 function handleGetStatus360(payload) {
   try {
-    const session = findSession(payload.sessionId);
+    const session = disc360RequireOwner(payload, payload && payload.sessionId);
     if (!session) return jsonResponse({ ok: false, error: "Sessão não encontrada" });
 
     const totalRespostas = countConvidados(payload.sessionId);
@@ -851,7 +1062,7 @@ function handleGetStatus360(payload) {
 // ═══════════════════════════════════════════════════════════════════════
 function handleGetReport360(payload) {
   try {
-    const session = findSession(payload.sessionId);
+    const session = disc360RequireOwner(payload, payload && payload.sessionId);
     if (!session) return jsonResponse({ ok: false, error: "Sessão não encontrada" });
 
     const respostas = getAllConvidados(payload.sessionId);
@@ -1228,14 +1439,27 @@ function breakdownByRelation(sessionId) {
 // ═══════════════════════════════════════════════════════════════════════
 // 🧮 CÁLCULOS DISC
 // ═══════════════════════════════════════════════════════════════════════
+// Contrato canônico DISC convidado v2: 24 itens, escala inteira 1–5.
+// Os itens 13–16 e 21–24 são invertidos; o mapa nunca vem do cliente.
+const DISC360_GUEST_SCORING_VERSION = "guest-24-v2-reverse8";
+const DISC360_GUEST_DIMS = Object.freeze([
+  "D","I","S","C","D","I","S","C","D","I","S","C",
+  "D","I","S","C","D","I","S","C","D","I","S","C"
+]);
+const DISC360_GUEST_REVERSED = Object.freeze([
+  false,false,false,false,false,false,false,false,
+  false,false,false,false,true,true,true,true,
+  false,false,false,false,true,true,true,true
+]);
 function calcDiscFromResponses(respostas) {
-  // Suporta 24 (convidado) e 48 (avaliado) respostas
-  const r = respostas || [];
+  if (!Array.isArray(respostas) || respostas.length !== 24 ||
+      !respostas.every(n => typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 5)) {
+    throw new Error("DISC 360: são obrigatórias 24 respostas inteiras na escala de 1 a 5.");
+  }
   const scores = { D: 0, I: 0, S: 0, C: 0 };
-  const dims = ["D", "I", "S", "C"];
-  for (let i = 0; i < r.length; i++) {
-    const dim = dims[i % 4];
-    scores[dim] += Number(r[i]) || 0;
+  for (let i = 0; i < 24; i++) {
+    const dim = DISC360_GUEST_DIMS[i];
+    scores[dim] += DISC360_GUEST_REVERSED[i] ? 6 - respostas[i] : respostas[i];
   }
   return scores;
 }
@@ -1666,12 +1890,102 @@ function autorizarEmailDrive() {
   return "OK - autorização Drive/Gmail concluída. Verifique o e-mail " + ADMIN_EMAIL;
 }
 
+
+// Relatório 360: idempotência independente das respostas dos convidados.
+// COMPLETE significa aceito pelo GmailApp no servidor, NÃO entregue à caixa de entrada.
+function disc360OnceReport(payload, owner, operation) {
+  const action = payload.action === "relatorio_disc" ? "relatorio_disc" : "relatorio_360";
+  const fingerprint = disc360GuestFingerprint(payload);
+  const lock = LockService.getScriptLock();
+  disc360GuestAssert(lock.tryLock(10000), "Servidor ocupado. Tente mais tarde com o mesmo requestId");
+  try {
+    const ss = getSpreadsheet();
+    let ledger = ss.getSheetByName("Operacoes360");
+    if (!ledger) {
+      ledger = ss.insertSheet("Operacoes360");
+      ledger.appendRow(["RequestId", "Action", "Fingerprint", "Status", "Response", "Timestamp", "SessionId"]);
+    }
+    const entries = ledger.getDataRange().getValues();
+    for (let i = 1; i < entries.length; i++) {
+      if (String(entries[i][0]) !== payload.requestId) continue;
+      disc360GuestAssert(entries[i][1] === action &&
+        entries[i][2] === fingerprint && entries[i][6] === owner.sessionId,
+        "requestId já utilizado com outra sessão, operação ou conteúdo");
+      if (entries[i][3] === "COMPLETE") {
+        return jsonResponse(Object.assign({}, JSON.parse(entries[i][4]), {duplicate: true}));
+      }
+      throw new Error("Envio pendente de conciliação administrativa. Não gere outro requestId.");
+    }
+    ledger.appendRow([payload.requestId, action, fingerprint, "PENDING", "", new Date(), owner.sessionId]);
+    SpreadsheetApp.flush();
+    const ledgerRow = ledger.getLastRow();
+    const response = operation(payload);
+    const result = JSON.parse(response.getContent());
+    if (result.ok === true) {
+      const receipt = Object.assign({}, result, {
+        requestId: payload.requestId, emailAccepted: true
+      });
+      ledger.getRange(ledgerRow, 4, 1, 2).setValues([["COMPLETE", JSON.stringify(receipt)]]);
+      SpreadsheetApp.flush();
+      return jsonResponse(receipt);
+    }
+    return response;
+  } finally {
+    lock.releaseLock();
+  }
+}
 function handleRelatorio360(payload) {
+  try {
+    const owner = disc360RequireOwner(payload, payload && payload.sessionId);
+    disc360GuestAssert(countConvidados(owner.sessionId) >= MIN_AVALIACOES_360,
+      "Avaliações insuficientes para gerar relatório");
+    disc360GuestAssert(typeof payload.requestId === "string" &&
+      /^[a-zA-Z0-9_-]{20,100}$/.test(payload.requestId), "requestId inválido");
+    disc360GuestAssert(typeof payload.pdfBase64 === "string" &&
+      payload.pdfBase64.length >= 8 && payload.pdfBase64.length <= 14000000 &&
+      /^[A-Za-z0-9+/]+={0,2}$/.test(payload.pdfBase64), "PDF inválido ou muito grande");
+    const bytes = Utilities.base64Decode(payload.pdfBase64);
+    disc360GuestAssert(bytes.length >= 5 && bytes.slice(0,5).map(x => x < 0 ? x + 256 : x).join(",") === "37,80,68,70,45",
+      "Anexo não é um PDF válido");
+    return disc360OnceReport(payload, owner, handleRelatorio360Original);
+  } catch (error) {
+    return jsonResponse({ok: false, error: error.message});
+  }
+}
+function handleGetOperation360Status(payload) {
+  try {
+    const owner = disc360RequireOwner(payload, payload && payload.sessionId);
+    disc360GuestAssert(typeof payload.requestId === "string" &&
+      /^[a-zA-Z0-9_-]{20,100}$/.test(payload.requestId), "requestId inválido");
+    const action = payload.reportType === "relatorio_disc" ? "relatorio_disc" : "relatorio_360";
+    const ledger = getSpreadsheet().getSheetByName("Operacoes360");
+    if (!ledger) return jsonResponse({ok: true, state: "NOT_FOUND"});
+    const entries = ledger.getDataRange().getValues();
+    for (let i = 1; i < entries.length; i++) {
+      if (String(entries[i][0]) !== payload.requestId || entries[i][1] !== action ||
+          String(entries[i][6] || "") !== String(owner.sessionId)) continue;
+      return jsonResponse({
+        ok: true, state: entries[i][3] === "COMPLETE" ? "ACCEPTED" : "PENDING",
+        emailAccepted: entries[i][3] === "COMPLETE", requestId: payload.requestId
+      });
+    }
+    return jsonResponse({ok: true, state: "NOT_FOUND"});
+  } catch (error) {
+    return jsonResponse({ok: false, error: error.message});
+  }
+}
+
+function handleRelatorio360Original(payload) {
   try {
     if (!payload || !payload.email || !payload.pdfBase64) {
       return jsonResponse({ ok: false, error: "PDF ou e-mail ausentes" });
     }
 
+    const owner = disc360RequireOwner(payload, payload.sessionId);
+    disc360GuestAssert(countConvidados(owner.sessionId) >= MIN_AVALIACOES_360,
+      "Avaliações insuficientes para gerar relatório");
+    disc360GuestAssert(typeof payload.pdfBase64 === "string" && payload.pdfBase64.length <= 14000000 &&
+      /^[A-Za-z0-9+/]+={0,2}$/.test(payload.pdfBase64), "PDF inválido ou muito grande");
     const reportFileName = payload.pdfFileName || "Relatorio360.pdf";
     const pdfBlob = makePdfBlob(payload.pdfBase64, reportFileName);
     let reportLink = "";
@@ -1744,7 +2058,25 @@ function handleRelatorio360(payload) {
   }
 }
 
+// Relatório Geral DISC: autenticação do titular e mesmo controle de idempotência do 360.
 function handleRelatorioDisc(payload) {
+  try {
+    const owner = disc360RequireOwner(payload, payload && payload.sessionId);
+    disc360GuestAssert(typeof payload.requestId === "string" &&
+      /^[a-zA-Z0-9_-]{20,100}$/.test(payload.requestId), "requestId inválido");
+    disc360GuestAssert(typeof payload.pdfBase64 === "string" &&
+      payload.pdfBase64.length >= 8 && payload.pdfBase64.length <= 14000000 &&
+      /^[A-Za-z0-9+/]+={0,2}$/.test(payload.pdfBase64), "PDF inválido ou muito grande");
+    const bytes = Utilities.base64Decode(payload.pdfBase64);
+    disc360GuestAssert(bytes.length >= 5 && bytes.slice(0,5).map(x => x < 0 ? x + 256 : x).join(",") === "37,80,68,70,45",
+      "Anexo não é um PDF válido");
+    return disc360OnceReport(payload, owner, handleRelatorioDiscOriginal);
+  } catch (error) {
+    return jsonResponse({ok: false, error: error.message});
+  }
+}
+
+function handleRelatorioDiscOriginal(payload) {
   try {
     if (!payload || !payload.email || !payload.pdfBase64) {
       return jsonResponse({ ok: false, error: "PDF ou e-mail ausentes" });
@@ -1886,67 +2218,32 @@ function logEvent(type, message) {
 // ═══════════════════════════════════════════════════════════════════════
 // 7.5️⃣ ATIVAR 360° (compartilhamento por LINK ABERTO + WhatsApp)
 // ═══════════════════════════════════════════════════════════════════════
+// O bônus 360° é vinculado a uma sessão pré-existente de saveDisc.
+// Nunca cria nova sessão nem altera scores com parâmetros públicos.
 function handleAtivar360(payload) {
   try {
-    const nome = String(payload.nomeAvaliado || "").trim();
+    if (!payload || typeof payload !== "object") throw new Error("Solicitação inválida");
     const email = String(payload.emailAvaliado || "").trim().toLowerCase();
     const pin = String(payload.pin || "").trim();
-
-    if (!nome || !email || !pin) {
-      return jsonResponse({ ok: false, error: "Dados obrigatórios ausentes (nome/email/pin)" });
+    if (!email || !/^\d{6}$/.test(pin)) throw new Error("Dados do titular inválidos");
+    const session = findSessionByEmailAndPin(email, pin);
+    if (!session || String(session.status) !== "ativo") {
+      throw new Error("A avaliação DISC precisa estar concluída e ativa");
     }
-
-    const sessionId = generateSessionId();
-    // 🆕 Gera o código 360° único (DISC-XXXXX); aceita o que o frontend enviou se válido
-    const codigoEnviado = String(payload.codigo || "").trim().toUpperCase();
-    const codigo360 = /^DISC-[A-Z0-9]{5}$/.test(codigoEnviado) ? codigoEnviado : generateCodigo360();
-
-    create360Session({
-      sessionId: sessionId,
-      pin: pin,
-      codigo360: codigo360,
-      nome: nome,
-      email: email,
-      whatsapp: payload.whatsappAvaliado || "",
-      scoreD: Number(payload.scoreD) || 0,
-      scoreI: Number(payload.scoreI) || 0,
-      scoreS: Number(payload.scoreS) || 0,
-      scoreC: Number(payload.scoreC) || 0,
-      perfilPrimario: payload.perfilPrimario || "",
-      exigenciaD: Number(payload.exigenciaD) || 0,
-      exigenciaI: Number(payload.exigenciaI) || 0,
-      exigenciaS: Number(payload.exigenciaS) || 0,
-      exigenciaC: Number(payload.exigenciaC) || 0
-    });
-
-    const modo = String(payload.modo || "").trim();
-    try {
-      sendAtivacao360Email(email, nome, pin, sessionId, codigo360);
-    } catch (e) {
-      logEvent("EMAIL_ERROR", "ativar_360 confirm: " + e.message);
+    if (payload.sessionId && String(payload.sessionId) !== String(session.sessionId)) {
+      throw new Error("Sessão divergente");
     }
-
-    try {
-      sendAdminEmail(
-        `[Impulso] 360° ativado: ${nome}`,
-        `Avaliado: ${nome}\nEmail: ${email}\nPIN: ${pin}\nCódigo: ${codigo360}\nSession: ${sessionId}\nModo: ${modo || "padrão"}`);
-    } catch (e) { /* silencioso */ }
-
-    logEvent("ATIVAR_360_OK",
-      `${nome} | ${email} | ${sessionId} | codigo=${codigo360} | modo=${modo || "padrão"}`);
-
+    if (!session.codigo360 || !/^DISC-[A-Z0-9]{5}$/.test(String(session.codigo360))) {
+      throw new Error("Código do convite indisponível, solicite suporte");
+    }
     return jsonResponse({
-      ok: true,
-      sessionId: sessionId,
-      pin: pin,
-      codigo: codigo360,
-      // 🆕 Link agora usa o código DISC-XXXXX como identificador público
-      linkConvidado: `${URL_PAGINA_CONVIDADO}?codigo=${codigo360}`,
-      modo: modo || "padrão"
+      ok: true, sessionId: session.sessionId, pin: pin,
+      codigo: session.codigo360,
+      linkConvidado: URL_PAGINA_CONVIDADO + "?codigo=" + session.codigo360,
+      modo: "sessao_existente"
     });
-  } catch (err) {
-    logEvent("ERROR", "ativar_360: " + err.message);
-    return jsonResponse({ ok: false, error: err.message });
+  } catch (error) {
+    return jsonResponse({ok:false,error:error.message});
   }
 }
 

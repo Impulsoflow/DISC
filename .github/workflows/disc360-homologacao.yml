@@ -1,0 +1,49 @@
+name: Homologacao DISC 360
+on:
+  pull_request:
+    paths:
+      - 'ScriptDisc.html'
+      - 'index.html'
+      - 'tests/**'
+      - '.github/workflows/disc360-homologacao.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-security:
+    name: Testes DISC 360 (sem producao)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validar sintaxe e testes automatizados
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp ScriptDisc.html /tmp/disc360-backend.js
+          node --check /tmp/disc360-backend.js
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          html = Path('index.html').read_text(encoding='utf-8')
+          blocks = re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>', html, re.I | re.S)
+          Path('/tmp/disc360-inline.js').write_text('\n'.join(blocks), encoding='utf-8')
+          PY
+          node --check /tmp/disc360-inline.js
+          node tests/disc360-reverse-scoring.test.cjs
+          node tests/disc360-backend-guards.test.cjs
+          node tests/disc360-central-grant.test.cjs
+          node tests/disc360-invite-access.test.cjs
+          node tests/disc360-log-privacy.test.cjs
+          node tests/disc360-report-aggregation.test.cjs
+          node --test tests/access-flow.test.mjs
+      - name: Lembrete de gate antes do deploy
+        run: |
+          echo 'O CI cobre somente testes locais com mocks.'
+          echo 'App Script real, Sheets staging, autorizacao V4 e Gmail exigem homologacao separada.'
+          echo 'Nao existe deploy automatico neste workflow.'
