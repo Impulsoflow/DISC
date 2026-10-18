@@ -1604,7 +1604,26 @@
     .consistency-high   { background: #d1fae5; color: #065f46; }
     .consistency-medium { background: #fef3c7; color: #92400e; }
     .consistency-low    { background: #fee2e2; color: #991b1b; }
+
+  /* IMPULSOFLOW: identificação discreta e sempre visível da versão do formulário. */
+  .impulso-form-version {
+    position: fixed;
+    right: 10px;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    z-index: 45;
+    padding: 4px 8px;
+    border: 1px solid rgba(148,163,184,.22);
+    border-radius: 99px;
+    background: rgba(248,250,252,.94);
+    color: #64748b;
+    font: 500 10px/1.4 Arial, sans-serif;
+    letter-spacing: .01em;
+    box-shadow: 0 1px 3px rgba(15,23,42,.04);
+    pointer-events: none;
+    user-select: none;
+  }
 </style>
+<meta name="impulso-form-version" content="v1.0.0">
 </head>
 
 <body>
@@ -8681,6 +8700,7 @@ function finishAllBlocks() {
 }
 
 </script>
+<div id="impulso-form-version" class="impulso-form-version" data-survey="disc" aria-label="Versão do formulário DISC — Autoavaliação" title="Versão do formulário DISC — Autoavaliação">Formulário v1.0.0</div>
 </body>
 </html>
   

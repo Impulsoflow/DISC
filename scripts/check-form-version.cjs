@@ -1,0 +1,11 @@
+const fs=require('node:fs');
+const assert=require('node:assert/strict');
+const html=fs.readFileSync('index.html','utf8');
+const obj=JSON.parse(fs.readFileSync('version.json','utf8'));
+const footer=html.match(/<div id="impulso-form-version"[^>]*>Formulário (v\d+\.\d+\.\d+)<\/div>/);
+const meta=html.match(/<meta name="impulso-form-version" content="(v\d+\.\d+\.\d+)">/);
+assert(footer&&meta,'Versão ausente do rodapé ou meta');
+assert.equal(footer[1],meta[1],'Versão do rodapé diferente da meta');
+assert.equal(meta[1],obj.formVersion,'Versão da meta diferente de version.json');
+assert.equal((html.match(/id="impulso-form-version"/g)||[]).length,1);
+console.log('PASS: versão '+obj.formVersion+' identificável no rodapé, HTML meta e version.json');
