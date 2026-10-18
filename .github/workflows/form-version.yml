@@ -16,3 +16,5 @@ jobs:
         run: node scripts/check-form-version.cjs
       - name: Exigir nova versão quando o formulário muda
         run: node scripts/check-release-bump.cjs
+      - name: Conferir entrada autenticada com autorização de aplicação
+        run: node tests/portal-handoff-form.test.cjs

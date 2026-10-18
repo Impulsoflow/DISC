@@ -1623,7 +1623,8 @@
     user-select: none;
   }
 </style>
-<meta name="impulso-form-version" content="v1.0.0">
+<meta name="impulso-form-version" content="v1.1.0">
+<meta name="referrer" content="no-referrer">
 </head>
 
 <body>
@@ -2751,6 +2752,7 @@ let autoSendInProgress = false;
 let autoSendDone = false;
 let emailSendAttempts = 0;
 let discAccessGrant = "";
+let discPortalLaunch = null; // temporary bearer from authenticated IMPULSO client portal
 let discRetakeAuthorized = false;
 const MAX_EMAIL_ATTEMPTS = 3;
 
@@ -2885,6 +2887,68 @@ function callAppsScriptJsonp(action, payload, timeoutMs = 30000) {
     document.head.appendChild(script);
   });
 }
+
+async function redeemPortalDiscLaunch(phase,token,environment){
+  const server=environment==="staging"
+    ? "https://impulso-portal-staging.impulsoflow-f91.workers.dev"
+    : "https://impulso-pesquisas-admin.prrogeriobraga.chatgpt.site";
+  const response=await fetch(server+"/api/cliente/resgatar-lancamento",{
+    method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({phase,token}),cache:"no-store",referrerPolicy:"no-referrer"
+  });
+  const data=await response.json().catch(()=>({}));
+  if(!response.ok||!data.ok)throw Error(data.error||"Seu acesso temporário expirou. Volte à Central e inicie novamente.");
+  return data;
+}
+
+async function openDiscFromImpulsoPortal(){
+  const hash=new URLSearchParams(window.location.hash.replace(/^#/,""));
+  const token=hash.get("impulso_lancamento");
+  if(!token)return;
+  const environment=hash.get("impulso_ambiente")==="staging"?"staging":"production";
+  window.history.replaceState(null,"",window.location.pathname+window.location.search);
+  if(!/^[a-f0-9]{48}$/.test(token))return;
+  try{
+    const profile=await redeemPortalDiscLaunch("preview",token,environment);
+    if(profile.researchId!=="disc")throw Error("Esta autorização não é do DISC.");
+    discPortalLaunch={...profile,token,environment};
+    const set=(id,value)=>{const node=document.getElementById(id);if(node){node.value=String(value||"");node.readOnly=true;}};
+    set("name",profile.name);set("email",profile.email);
+    const phone=document.getElementById("whatsapp");if(phone){phone.value=profile.whatsapp||"";if(typeof maskWhatsApp==="function")maskWhatsApp(phone);phone.readOnly=true;}
+    // Legacy 360 storage still needs a PIN; generate it with CSPRNG but never ask
+    // a logged-in client to create a second account password.
+    const random=crypto.getRandomValues(new Uint32Array(1))[0];
+    const generated=String(100000+(random%900000));
+    set("signup-pin-single",generated);set("signup-pin-confirm-single",generated);
+    for(const id of ["name","email","whatsapp","signup-pin-single"]){
+      const n=document.getElementById(id);const wrapper=n?.closest(".form-group");if(wrapper)wrapper.style.display="none";
+    }
+    const intro=document.querySelector("#step-intro > div:first-child");
+    if(intro){intro.replaceChildren();
+      const header=document.createElement("h2");header.textContent=profile.applicationNumber===1?"Sua primeira avaliação DISC":"Refazer pela "+profile.applicationNumber+"ª vez";
+      const desc=document.createElement("p");desc.textContent="A Central Impulso já confirmou sua identidade e autorização. Complete somente as informações complementares para o relatório.";
+      intro.append(header,desc);
+    }
+    const cta=document.getElementById("start-btn");
+    if(cta)cta.textContent=profile.applicationNumber===1?"Começar minha avaliação →":"Refazer pela "+profile.applicationNumber+"ª vez →";
+    // The authenticated portal is the central point to view verified PDF reports.
+    const secondary=document.querySelector("#step-intro .card > div:last-child");
+    if(secondary&&secondary!==cta?.parentElement){
+      secondary.replaceChildren();
+      const link=document.createElement("a");link.href=environment==="staging"
+        ?"https://impulso-portal-staging.impulsoflow-f91.workers.dev/minha-conta#meus-relatorios"
+        :"https://impulso-pesquisas-admin.prrogeriobraga.chatgpt.site/minha-conta#meus-relatorios";
+      link.textContent="Meus relatórios na Central (sem PIN) →";link.className="btn btn-ghost";secondary.append(link);
+    }
+    showStep("step-intro");validateForm();
+  }catch(error){
+    showStep("step-welcome");
+    const notice=document.createElement("div");notice.setAttribute("role","alert");notice.className="status status-error";
+    notice.textContent="Não foi possível confirmar sua sessão. Volte ao painel Impulso para iniciar: "+String(error?.message||"acesso expirado");
+    document.querySelector("#step-welcome")?.prepend(notice);
+  }
+}
+window.addEventListener("DOMContentLoaded",()=>{void openDiscFromImpulsoPortal();});
 
 async function postCentralAccess(payload) {
   const response = await fetch(CENTRAL_ACCESS_URL, {
@@ -3133,6 +3197,23 @@ async function startTest() {
   }
 
   try {
+    if (discPortalLaunch) {
+      // Session identity is verified by the portal, not by editable fields or URL parameters.
+      if (name!==discPortalLaunch.name||email!==discPortalLaunch.email||whatsapp.replace(/\D/g,"")!==discPortalLaunch.whatsapp.replace(/\D/g,""))
+        throw new Error("Os dados desta conta não correspondem ao acesso autenticado. Volte à Central.");
+      if (discPortalLaunch.firstUse) {
+        const legacy=await callAppsScriptJsonp("validateDiscAccess",{email,whatsapp});
+        if(!legacy?.ok||!legacy.allowed)throw new Error("Existe uma avaliação DISC anterior que precisa de autorização de reaplicação. Solicite conferência na Central.");
+      }
+      const result=await redeemPortalDiscLaunch("start",discPortalLaunch.token,discPortalLaunch.environment);
+      if(!result.ok||!result.grant)throw Error(result.error||"A autorização não pôde ser iniciada.");
+      discAccessGrant=result.grant;
+      discRetakeAuthorized=result.retakeAuthorized===true;
+      discPortalLaunch=null; // token consumido; nunca reaproveitar um início anterior
+      signupPin=pinForm;
+      showStep("step-quiz");renderQuestion();updateProgress();
+      return;
+    }
     const context = { researchId: "disc", name, email, whatsapp };
     const centralAccess = await postCentralAccess({ action: "validate", ...context });
 
@@ -8700,7 +8781,7 @@ function finishAllBlocks() {
 }
 
 </script>
-<div id="impulso-form-version" class="impulso-form-version" data-survey="disc" aria-label="Versão do formulário DISC — Autoavaliação" title="Versão do formulário DISC — Autoavaliação">Formulário v1.0.0</div>
+<div id="impulso-form-version" class="impulso-form-version" data-survey="disc" aria-label="Versão do formulário DISC — Autoavaliação" title="Versão do formulário DISC — Autoavaliação">Formulário v1.1.0</div>
 </body>
 </html>
   
