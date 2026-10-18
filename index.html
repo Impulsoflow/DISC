@@ -5636,6 +5636,10 @@ async function autoSendResult(scores, ranked) {
     if (!saved || !saved.ok || !saved.sessionId) {
       throw new Error((saved && saved.error) || "A planilha não confirmou o salvamento do resultado.");
     }
+    // Use o código/PIN confirmado pela mesma sessão que recebeu a autoavaliação.
+    // Não crie outra sessão ao abrir o convite (evita separar convidados do titular).
+    pinAtual360 = String(saved.pin || signupPin || "").trim();
+    codigoAtual360 = String(saved.codigo360 || "").trim().toUpperCase();
 
     // A cobrança/uso já foi registrado antes do questionário. A finalização na
     // Central acontece pelo mesmo navegador (sem depender de permissão extra
@@ -5788,44 +5792,26 @@ function montarLinkConvite360(codigoOuPin) {
    Popula pinAtual360 e codigoAtual360. Retorna true em sucesso. */
 async function gerarLinkConvite360() {
   try {
-    // 🆕 USAR o PIN que o avaliado criou no cadastro (NÃO gerar novo)
-    const pin = signupPin;
-    const codigo = gerarCodigoDISC();
+    // A pesquisa já criou a sessão no saveDisc. Consulte apenas a sessão real.
+    const email = String(document.getElementById("email").value.trim() ||
+      (dadosPainel360 && dadosPainel360.email) || "").toLowerCase();
+    const pin = String(signupPin || (dadosPainel360 && dadosPainel360.pin) || "").trim();
+    if (!email || !/^\d{6}$/.test(pin)) throw new Error("Identificação do titular indisponível");
+    const res = await callAppsScriptJsonp("consultar_360", { email, pin });
+    const codigo = String(res && res.codigo360 || "").trim().toUpperCase();
+    if (!res || !res.ok || !/^DISC-[A-Z0-9]{5}$/.test(codigo)) {
+      throw new Error("Sessão 360° não encontrada. Conclua a pesquisa antes de convidar.");
+    }
     pinAtual360 = pin;
     codigoAtual360 = codigo;
-    avaliadoresAtuais360 = []; // sem lista — link aberto
-
-    const payload = {
-      apiKey: API_KEY,
-      action: "ativar_360",
-      testId: "disc_360",
-      modo: "link_aberto",      // 🆕 sinaliza ao backend: NÃO disparar emails individuais
-      nomeAvaliado: document.getElementById("name").value.trim(),
-      emailAvaliado: document.getElementById("email").value.trim(),
-      whatsappAvaliado: document.getElementById("whatsapp").value.trim(),
-      profissaoAvaliado: document.getElementById("occupation").value.trim(),
-      pin: pin,
-      codigo: codigo, // 🆕 backend usa este código se vier válido (DISC-XXXXX)
-      scoreD: scoresDisc360 ? scoresDisc360.D : 0,
-      scoreI: scoresDisc360 ? scoresDisc360.I : 0,
-      scoreS: scoresDisc360 ? scoresDisc360.S : 0,
-      scoreC: scoresDisc360 ? scoresDisc360.C : 0,
-      perfilPrimario: rankedDisc360 ? fullProfiles[rankedDisc360[0]].name : "",
-      perfilSecundario: rankedDisc360 ? fullProfiles[rankedDisc360[1]].name : "",
-      avaliadores: [],
-      dataAtivacao: new Date().toISOString()
-    };
-
-    await postResultToScript(payload);
+    avaliadoresAtuais360 = [];
     return true;
   } catch (e) {
-    console.error("Erro ao gerar link 360°:", e);
+    console.error("Erro ao recuperar link da sessão 360°:", e);
     const status = document.getElementById("ativar-360-status");
     if (status) {
-      status.textContent = "❌ Erro ao gerar link. Tente novamente em instantes.";
+      status.textContent = "❌ Não foi possível recuperar o convite. Faça login no painel 360° e tente novamente.";
       status.className = "status status-error";
-    } else {
-      alert("Erro ao gerar link. Tente novamente.");
     }
     pinAtual360 = null;
     codigoAtual360 = null;
@@ -6297,6 +6283,10 @@ async function fazerLogin360() {
       escolaridade: resp.escolaridadeAvaliado || "",
       idade:        resp.idadeAvaliado        || ""
     };
+
+    // Ao voltar pelo login, compartilhe o mesmo código canônico da sessão.
+    pinAtual360 = pin;
+    codigoAtual360 = String(resp.codigo360 || "").trim().toUpperCase();
 
     if (statusEl) { statusEl.textContent = "✅ Login validado!"; statusEl.style.color = "#059669"; }
 
