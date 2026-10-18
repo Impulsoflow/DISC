@@ -7051,11 +7051,11 @@ async function generate360PDF() {
       if (!candidate) continue;
       try {
         const dataUrl = await urlToDataUrl360(candidate);
-        return await compressImageDataUrl360(dataUrl, 1000, 0.92);
+        return await compressImageDataUrl360(dataUrl, 550, 0.92);
       } catch (e) {}
     }
     try {
-      return await compressImageDataUrl360(fallback, 1000, 0.92);
+      return await compressImageDataUrl360(fallback, 550, 0.92);
     } catch (inner) {
       return fallback;
     }
