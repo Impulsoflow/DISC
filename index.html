@@ -2817,7 +2817,8 @@ function validateForm() {
   if (!age || age < 15 || age > 120) valid = setFieldError("age", "age-error", "Idade inválida.") && valid; else setFieldError("age", "age-error", "");
   if (!prof) valid = setFieldError("occupation", "prof-error", "Informe a profissão.") && valid; else setFieldError("occupation", "prof-error", "");
   if (!edu) valid = setFieldError("education", "edu-error", "Selecione a instrução.") && valid; else setFieldError("education", "edu-error", "");
-  // 🆕 Validação do PIN de cadastro (com confirmação)
+  // O PIN é reservado ao fluxo legado. Ingresso por conta autenticada não cria PIN manual.
+  if(!window.ImpulsoAccountBridge?.identity){
   if (!pin || pin.length !== 6) {
     valid = setFieldError("signup-pin-wrapper", "signup-pin-error", "Crie um PIN válido de 6 dígitos.") && valid;
   } else if (!pinConfirm || pinConfirm.length !== 6) {
@@ -2826,6 +2827,7 @@ function validateForm() {
     valid = setFieldError("signup-pin-wrapper", "signup-pin-error", "❌ Os PINs não combinam. Digite novamente.") && valid;
   } else {
     setFieldError("signup-pin-wrapper", "signup-pin-error", "");
+  }
   }
   document.getElementById("start-btn").disabled = !valid;
 }
@@ -3097,6 +3099,36 @@ const responses2 = new Array(TOTAL_Q).fill(null);
 let isTransitioning = false;
 
 async function startTest() {
+  // Entrada autenticada IMPULSO: nunca exigir novo cadastro ou PIN manual.
+  // O PIN legado continua interno ao DISC 360 para vincular convidados.
+  if(window.ImpulsoAccountBridge?.active){
+    const bridge=window.ImpulsoAccountBridge;
+    const identity=bridge.identity;
+    if(!identity){alert("A identificação da conta ainda não foi confirmada. Retorne à plataforma IMPULSO.");return;}
+    const age=document.getElementById("age").value.trim();
+    const profession=document.getElementById("occupation").value.trim();
+    const education=document.getElementById("education").value.trim();
+    if(!age||!profession||!education){alert("Complete apenas idade, profissão e escolaridade, necessários ao seu relatório DISC.");return;}
+    const button=document.getElementById("start-btn");
+    const previous=button&&button.textContent;
+    if(button){button.disabled=true;button.textContent="Confirmando sua autorização...";}
+    try{
+      // Protege histórico DISC antigo ainda não migrado ao D1, sem emitir novo cadastro.
+      if(identity.firstUse){
+        const oldUse=await callAppsScriptJsonp("validateDiscAccess",{email:identity.email,whatsapp:identity.whatsapp});
+        if(!oldUse||!oldUse.ok||!oldUse.allowed)throw Error("Existe um DISC anterior ou o histórico precisa ser verificado. Retorne à Central para solicitar autorização.");
+      }
+      const granted=await bridge.start();
+      discAccessGrant=granted.grant;
+      discRetakeAuthorized=granted.retakeAuthorized===true;
+      // Código legado 360 gerado localmente; não é senha nem cadastro da plataforma.
+      const random=new Uint32Array(1);crypto.getRandomValues(random);
+      signupPin=String(100000+(random[0]%900000));
+      showStep("step-quiz");renderQuestion();updateProgress();
+    }catch(error){alert("Não foi possível iniciar pela conta IMPULSO: "+(error?.message||"Tente novamente pela plataforma."));}
+    finally{if(button){button.disabled=false;button.textContent=previous||"Iniciar pesquisa";}}
+    return;
+  }
   const name = document.getElementById("name").value.trim();
   const email = document.getElementById("email").value.trim();
   const whatsapp = document.getElementById("whatsapp").value.trim();
@@ -5665,9 +5697,14 @@ async function autoSendResult(scores, ranked) {
     // do Apps Script) e nunca desfaz um resultado já salvo.
     let centralCompletionError = null;
     try {
-      const completedAccess = await postCentralAccess({ action: "start", grant: discAccessGrant });
-      if (!completedAccess.started || completedAccess.phase !== "UTILIZADO") {
-        throw new Error((completedAccess && completedAccess.error) || "A Central não confirmou a finalização.");
+      if(window.ImpulsoAccountBridge?.active){
+        const received=await window.ImpulsoAccountBridge.reportSaved(true);
+        if(!received)throw Error("Recibo de resultado salvo no Google ainda não confirmado no administrativo.");
+      }else{
+        const completedAccess = await postCentralAccess({ action: "start", grant: discAccessGrant });
+        if (!completedAccess.started || completedAccess.phase !== "UTILIZADO") {
+          throw new Error((completedAccess && completedAccess.error) || "A Central não confirmou a finalização.");
+        }
       }
     } catch (completionError) {
       centralCompletionError = completionError;
@@ -8701,6 +8738,7 @@ function finishAllBlocks() {
 
 </script>
 <div id="impulso-form-version" class="impulso-form-version" data-survey="disc" aria-label="Versão do formulário DISC — Autoavaliação" title="Versão do formulário DISC — Autoavaliação">Formulário v1.0.0</div>
+<script src="https://impulso-portal-staging.impulsoflow-f91.workers.dev/impulso-login-unico.js" data-impulso-research="disc" defer></script>
 </body>
 </html>
   
