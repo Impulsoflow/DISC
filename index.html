@@ -1623,7 +1623,7 @@
     user-select: none;
   }
 </style>
-<meta name="impulso-form-version" content="v1.0.0">
+<meta name="impulso-form-version" content="v1.1.0">
 </head>
 
 <body>
@@ -2164,7 +2164,7 @@
           </div>
           <div class="stat-card">
             <div class="stat-num" id="stat-progresso">0%</div>
-            <div class="stat-label">Progresso para 3 Respostas</div>
+            <div class="stat-label">Progresso para 5 Respostas</div>
           </div>
         </div>
 
@@ -2172,7 +2172,7 @@
         <div style="background:#f8fbff; border:1.5px solid #d8e7fb; border-radius:14px; padding:14px 16px; margin:14px 0 18px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
             <span style="font-size:13px; font-weight:800; color:#063b7a;">📊 Progresso para Gerar Relatório</span>
-            <span style="font-size:13px; font-weight:700; color:#0b63ce;" id="progresso-texto">0/3</span>
+            <span style="font-size:13px; font-weight:700; color:#0b63ce;" id="progresso-texto">0/5</span>
           </div>
           <div style="width:100%; height:16px; background:#e6eefc; border-radius:999px; overflow:hidden; border:1px solid rgba(11,99,206,.12);">
             <div id="progresso-barra" style="height:100%; width:0%; border-radius:999px; background:linear-gradient(90deg, #0b63ce, #1e40af); transition:width 0.35s ease-in-out;"></div>
@@ -2201,8 +2201,11 @@
           <button onclick="atualizarPainel()" class="btn btn-ghost" type="button">
             🔄 Atualizar Status
           </button>
-          <button id="btn-gerar-relatorio-geral" onclick="gerarRelatorioGeral()" class="btn btn-ghost" type="button">
-            📄 Gerar Relatório Completo
+          <button id="btn-relatorio-individual-painel" onclick="gerarRelatorioIndividualPainel()" class="btn btn-ghost" type="button">
+            📄 Meu Relatório Individual DISC
+          </button>
+          <button id="btn-gerar-relatorio-geral" onclick="gerarRelatorioGeral()" class="btn btn-ghost" type="button" disabled>
+            📘 Relatório Consolidado DISC + 360°
           </button>
           <button onclick="enviarLinkWhatsapp360()" class="btn btn-ghost" type="button">
             📱 Enviar por WhatsApp
@@ -2210,8 +2213,11 @@
           <button onclick="copiarLinkComExplicacao()" class="btn btn-ghost" type="button">
             📋 Copiar Link
           </button>
+          <button id="btn-finalizar-360" onclick="finalizarAvaliacao360()" class="btn btn-gold" type="button" disabled>
+            ✅ Finalizar avaliação 360° (mínimo 5)
+          </button>
           <button id="btn-gerar-relatorio-360" onclick="gerarRelatorio360()" class="btn btn-gold" type="button" disabled>
-            📄 Gerar Relatório Comparativo (PDF)
+            📄 Relatório Comparativo 360° (PDF)
           </button>
           <button onclick="voltarParaIntro()" class="btn btn-ghost" type="button">
             ← Sair
@@ -2221,7 +2227,7 @@
         <div id="dash-relatorio-status" class="status" style="text-align:center; margin-top:16px;"></div>
 
         <p style="text-align:center; margin-top:18px; font-size:12px; color:#64748b;">
-          💡 <strong>Dica:</strong> recomendamos pelo menos <strong>3 avaliações</strong> respondidas para gerar um relatório robusto.
+          💡 <strong>Dica:</strong> recomendamos pelo menos <strong>5 avaliações</strong> respondidas para gerar um relatório robusto.
         </p>
       </section>
 
@@ -3554,7 +3560,7 @@ async function registerOpenSansFont(doc) {
 }
 
 // GERAÇÃO DO PDF — COM CABEÇALHOS E CAPAS EXATAMENTE COMO SOLICITADO
-async function generatePDF(scores, ranked) {
+async function generatePDF(scores, ranked, reportContext = null) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
   const pdfFontFamily = await registerOpenSansFont(doc);
@@ -3563,10 +3569,10 @@ async function generatePDF(scores, ranked) {
 
   const pcts = getPercentages(scores);
   const [first, second, third, fourth] = ranked;
-  // Lê do formulário; se vazio, usa dados do painel 360° (acesso via login)
-  const _p360 = (typeof dadosPainel360 !== 'undefined' && dadosPainel360) || {};
+  // Cadastro logado tem prioridade; dados de outro formulário aberto nunca substituem o participante.
+  const _p360 = reportContext || {};
   const contextDemandForReport = (() => {
-    const src = contextDemandScoresGlobal || _p360.exigenciaAuto || null;
+    const src = reportContext ? (_p360.exigenciaAuto || null) : (contextDemandScoresGlobal || null);
     if (!src) return null;
     const normalized = {
       D: Math.max(0, Math.min(100, Math.round(Number(src.D) || 0))),
@@ -3576,30 +3582,14 @@ async function generatePDF(scores, ranked) {
     };
     return (normalized.D + normalized.I + normalized.S + normalized.C) > 0 ? normalized : null;
   })();
-  const formattedName  = toTitleCase(sanitize(document.getElementById("name").value.trim()       || _p360.nome        || ""));
-  const formattedProf  = toTitleCase(sanitize(document.getElementById("occupation").value.trim() || _p360.profissao   || ""));
-  const formattedEdu   = sanitize(document.getElementById("education").value.trim()              || _p360.escolaridade || "");
-  const formattedAge   = sanitize(document.getElementById("age").value.trim()                    || _p360.idade        || "");
-  const formattedEmail = sanitize(document.getElementById("email").value.trim()                  || _p360.email        || "");
-  const formattedWA    = sanitize(document.getElementById("whatsapp").value.trim()               || _p360.whatsapp     || "");
-  const feedbackPerceptionForReport = (() => {
-    const list = Array.isArray(_p360.respostas) ? _p360.respostas : [];
-    if (!list.length) return null;
-    const sum = { D:0, I:0, S:0, C:0 };
-    list.forEach(r => {
-      sum.D += Number(r.pctD || r.scoreD) || 0;
-      sum.I += Number(r.pctI || r.scoreI) || 0;
-      sum.S += Number(r.pctS || r.scoreS) || 0;
-      sum.C += Number(r.pctC || r.scoreC) || 0;
-    });
-    return {
-      D: clampScore(sum.D / list.length),
-      I: clampScore(sum.I / list.length),
-      S: clampScore(sum.S / list.length),
-      C: clampScore(sum.C / list.length),
-      n: list.length
-    };
-  })();
+  const formattedName  = toTitleCase(sanitize(_p360.nome || document.getElementById("name").value.trim()        || ""));
+  const formattedProf  = toTitleCase(sanitize(_p360.profissao || document.getElementById("occupation").value.trim()   || ""));
+  const formattedEdu   = sanitize(_p360.escolaridade || document.getElementById("education").value.trim() || "");
+  const formattedAge   = sanitize(_p360.idade || document.getElementById("age").value.trim()        || "");
+  const formattedEmail = sanitize(_p360.email || document.getElementById("email").value.trim()        || "");
+  const formattedWA    = sanitize(_p360.whatsapp || document.getElementById("whatsapp").value.trim()     || "");
+  // O DISC individual é imutável: percepções externas entram apenas no anexo 360°.
+  const feedbackPerceptionForReport = null;
   const feedbackDemandForReport = (() => {
     const src = _p360.mediasDemanda || null;
     if (!src) return null;
@@ -6328,6 +6318,9 @@ async function fazerLogin360() {
       totalAvaliadores: resp.totalAvaliadores,
       totalRespondidos: resp.totalRespondidos,
       completa: resp.completa,
+      finalizado360: !!resp.finalizado360,
+      finalizadoEm: resp.finalizadoEm || "",
+      totalCongelado: Number(resp.totalCongelado)||0,
       avaliadores: resp.avaliadores || [],
       respostas: resp.respostas || [],
       mediasDemanda: resp.mediasDemanda || null,
@@ -6628,11 +6621,9 @@ function renderPainel() {
   const respondidos = lista.filter(a => a.respondido).length;
   const pendentes = total - respondidos;
 
-  // 🆕 Progresso baseado em 15 respostas MÁXIMAS (100% = 15 avaliadores)
-  // Mas relatório é liberado com apenas 3+
-  const MIN_PARA_RELATORIO = 3;
-  const MAX_CONVIDADOS = 15;
-  const progresso = Math.min(Math.round((respondidos / MAX_CONVIDADOS) * 100), 100);
+  // Liberação aos 5, sem teto: o avaliado decide quando encerrar a coleta.
+  const MIN_PARA_RELATORIO = 5;
+  const progresso = Math.min(Math.round((respondidos / MIN_PARA_RELATORIO) * 100), 100);
 
   document.getElementById("stat-total").textContent = total;
   document.getElementById("stat-respondidos").textContent = respondidos;
@@ -6641,7 +6632,7 @@ function renderPainel() {
 
   // 🆕 Atualiza a barra de progresso visual (0-15 = 100%)
   document.getElementById("progresso-barra").style.width = progresso + "%";
-  document.getElementById("progresso-texto").textContent = respondidos + "/" + MAX_CONVIDADOS + " (Relatório liberado com 3+)";
+  document.getElementById("progresso-texto").textContent = respondidos + "/" + MIN_PARA_RELATORIO + (dadosPainel360.finalizado360 ? " · Finalizado" : respondidos>=5 ? " · Pode finalizar ou continuar aguardando" : " · Aguardando");
 
   const cont = document.getElementById("dash-avaliadores-list");
   if (total === 0) {
@@ -6670,15 +6661,15 @@ function renderPainel() {
     });
   }
 
-  // Habilita relatório se ≥ 3 respostas
+  const finalizado = !!dadosPainel360.finalizado360;
+  const pronto = respondidos >= MIN_PARA_RELATORIO;
+  const btnFinal = document.getElementById("btn-finalizar-360");
   const btnRel = document.getElementById("btn-gerar-relatorio-360");
-  if (respondidos >= 3) {
-    btnRel.disabled = false;
-    btnRel.title = "Gerar relatório comparativo em PDF";
-  } else {
-    btnRel.disabled = true;
-    btnRel.title = `Aguardando ${3 - respondidos} resposta(s) para liberar o relatório.`;
-  }
+  const btnGeral = document.getElementById("btn-gerar-relatorio-geral");
+  const scoresOk = !!applyScoresAuto360(dadosPainel360.scoresAuto);
+  if (btnFinal) { btnFinal.disabled = finalizado || !pronto || !scoresOk; btnFinal.textContent = finalizado ? "✅ Avaliação 360° finalizada" : "✅ Finalizar avaliação 360° ("+respondidos+" respostas)"; }
+  if (btnRel) { btnRel.disabled = !finalizado || !scoresOk; btnRel.title = finalizado ? "Gerar avaliação externa consolidada" : "Disponível somente após a finalização."; }
+  if (btnGeral) { btnGeral.disabled = !finalizado || !scoresOk; btnGeral.title = finalizado ? "Gerar DISC original + 360°" : "Finalize a pesquisa 360° para consolidar os relatórios."; }
 
   setRelatorioModo(relatorioPainelModo);
 }
@@ -6713,6 +6704,9 @@ async function atualizarStatus360() {
     dadosPainel360.totalAvaliadores = resp.totalAvaliadores;
     dadosPainel360.totalRespondidos = resp.totalRespondidos;
     dadosPainel360.completa = resp.completa;
+    dadosPainel360.finalizado360 = !!resp.finalizado360;
+    dadosPainel360.finalizadoEm = resp.finalizadoEm || "";
+    dadosPainel360.totalCongelado = Number(resp.totalCongelado)||0;
     dadosPainel360.avaliadores = resp.avaliadores || [];
     dadosPainel360.respostas = resp.respostas || [];
     dadosPainel360.mediasDemanda = resp.mediasDemanda || dadosPainel360.mediasDemanda || null;
@@ -6768,9 +6762,59 @@ function resetDisc360RequestId(scope, seed) {
   try { localStorage.removeItem("disc360_request_" + safeScope + "_" + safeSeed); } catch (e) {}
 }
 
+// O relatório individual está sempre disponível, independentemente do 360°.
+async function gerarRelatorioIndividualPainel() {
+  if (!dadosPainel360) return;
+  const scores=applyScoresAuto360(dadosPainel360.scoresAuto);
+  const status=document.getElementById("dash-relatorio-status");
+  if (!scores) { if(status) status.textContent="❌ Resultado original indisponível. Solicite recuperação dos dados."; return; }
+  try {
+    const pdf=await generatePDF(scores,getRanked(scores),dadosPainel360);
+    const safeName=(dadosPainel360.nome||"avaliado").replace(/\s+/g,"_").replace(/[^a-zA-Z0-9_]/g,"");
+    pdf.save("RelatorioIndividual_DISC_"+safeName+".pdf");
+    if(status) {status.textContent="✅ Relatório individual DISC gerado.";status.className="status status-success";}
+  } catch(e) {
+    if(status) {status.textContent="❌ Falha na geração do relatório individual: "+e.message;status.className="status status-error";}
+  }
+}
+async function finalizarAvaliacao360() {
+  if (!dadosPainel360 || dadosPainel360.finalizado360) return;
+  const status=document.getElementById("dash-relatorio-status");
+  if (Number(dadosPainel360.totalRespondidos)<5) return;
+  if (!confirm("Deseja finalizar definitivamente o DISC 360° com "+dadosPainel360.totalRespondidos+" avaliações? Após confirmar, não serão aceitas novas respostas.")) return;
+  const btn=document.getElementById("btn-finalizar-360");
+  if(btn) btn.disabled=true;
+  try {
+    const resp=await callAppsScriptJsonp("finalizar_360", {email:dadosPainel360.email,pin:dadosPainel360.pin,sessionId:dadosPainel360.sessionId});
+    if(!resp || !resp.ok || !resp.finalizado) throw new Error(resp && (resp.error||resp.message)||"Finalização não confirmada.");
+    dadosPainel360.finalizado360=true;
+    dadosPainel360.finalizadoEm=resp.finalizadoEm||"";
+    dadosPainel360.totalCongelado=Number(resp.totalCongelado)||0;
+    // Buscar a amostra oficial congelada; antes da finalização o servidor só expõe contagem.
+    const confirmacao=await callAppsScriptJsonp("consultar_360",{
+      email:dadosPainel360.email,pin:dadosPainel360.pin
+    });
+    if (!confirmacao || !confirmacao.ok || !confirmacao.finalizado360 ||
+        !Array.isArray(confirmacao.respostas) ||
+        confirmacao.respostas.length!==dadosPainel360.totalCongelado)
+      throw new Error("Finalização salva, mas a amostra do relatório ainda não foi sincronizada. Atualize o painel antes de gerar o PDF.");
+    dadosPainel360.respostas=confirmacao.respostas;
+    dadosPainel360.avaliadores=confirmacao.avaliadores||[];
+    dadosPainel360.mediasDemanda=confirmacao.mediasDemanda||null;
+    dadosPainel360.totalRespondidos=confirmacao.totalRespondidos;
+    dadosPainel360.scoresAuto=applyScoresAuto360(confirmacao.scoresAuto);
+    renderPainel();
+    if(status){status.textContent="✅ Pesquisa encerrada com "+dadosPainel360.totalCongelado+" respostas. Preparando o relatório consolidado...";status.className="status status-success";}
+    await gerarRelatorioGeral();
+  } catch(e) {
+    if(status){status.textContent="❌ "+e.message;status.className="status status-error";}
+    renderPainel();
+  }
+}
 /* ---------- Relatório 360° (PDF) ---------- */
 async function gerarRelatorio360() {
-  if (!dadosPainel360) return;
+  if (!dadosPainel360 || !dadosPainel360.finalizado360) { alert("Finalize primeiro a avaliação 360° com pelo menos cinco respostas."); return; }
+  if (!applyScoresAuto360(dadosPainel360.scoresAuto)) {alert("Resultado DISC original não encontrado.");return;}
   const status = document.getElementById("dash-relatorio-status");
   const btn = document.getElementById("btn-gerar-relatorio-360");
 
@@ -6822,7 +6866,7 @@ async function gerarRelatorio360() {
 }
 
 async function gerarRelatorioGeral() {
-  if (!dadosPainel360) return;
+  if (!dadosPainel360 || !dadosPainel360.finalizado360) { alert("O relatório consolidado só é permitido após a finalização do 360°.");return; }
   const status = document.getElementById("dash-relatorio-status");
   const btn = document.getElementById("btn-gerar-relatorio-geral");
 
@@ -6836,10 +6880,11 @@ async function gerarRelatorioGeral() {
   }
 
   try {
-    const scores = scoresDisc360 || dadosPainel360.scoresAuto || { D: 0, I: 0, S: 0, C: 0 };
-    const ranked = rankedDisc360 || getRanked(scores);
+    const scores = applyScoresAuto360(dadosPainel360.scoresAuto);
+    if (!scores) throw new Error("Dados originais do DISC indisponíveis.");
+    const ranked = getRanked(scores);
     const [pdfDisc, pdf360] = await Promise.all([
-      generatePDF(scores, ranked),
+      generatePDF(scores, ranked, dadosPainel360),
       generate360PDF()
     ]);
     const mergedBlob = await mergePdfDocs([pdfDisc, pdf360]);
@@ -6866,6 +6911,7 @@ async function gerarRelatorioGeral() {
     await postResultToScript({
       apiKey: API_KEY,
       action: "relatorio_disc",
+      reportKind: "consolidado360",
       requestId: getOrCreateDisc360RequestId("relatorioDisc", (dadosPainel360.sessionId || dadosPainel360.email || "") + "_" + (dadosPainel360.pin || "")),
       email: dadosPainel360.email,
       sessionId: dadosPainel360.sessionId || "",
@@ -7012,7 +7058,8 @@ async function generate360PDF() {
   const nResp     = respostas.length || lista.filter(a=>a.respondido).length;
   const hasEval   = nResp > 0;
 
-  const selfRaw  = scoresDisc360 || {D:0,I:0,S:0,C:0};
+  const selfRaw  = applyScoresAuto360(dadosPainel360.scoresAuto);
+  if (!selfRaw) throw new Error("Autopercepção DISC ausente: relatório 360° bloqueado.");
   const selfP    = calcPcts360(selfRaw);
   const evalRaw  = calcAvgEval360(respostas);
   const evalP    = calcPcts360(evalRaw);
@@ -8737,7 +8784,7 @@ function finishAllBlocks() {
 }
 
 </script>
-<div id="impulso-form-version" class="impulso-form-version" data-survey="disc" aria-label="Versão do formulário DISC — Autoavaliação" title="Versão do formulário DISC — Autoavaliação">Formulário v1.0.0</div>
+<div id="impulso-form-version" class="impulso-form-version" data-survey="disc" aria-label="Versão do formulário DISC — Autoavaliação" title="Versão do formulário DISC — Autoavaliação">Formulário v1.1.0</div>
 <script src="https://impulso-portal-staging.impulsoflow-f91.workers.dev/impulso-login-unico.js" data-impulso-research="disc" defer></script>
 </body>
 </html>
